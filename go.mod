@@ -1,4 +1,4 @@
-module general
+module github.com/stevegt/tanis
 
 go 1.18
 

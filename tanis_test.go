@@ -1,4 +1,10 @@
-package general
+package tanis
+
+// Many of the following test cases were adapted from
+// https://github.com/zserge/nanonn/blob/master/go/nn_test.go,
+// licensed under the Apache 2.0 license by Serge Zaitsev.  The nanonn
+// project is a good Rosetta Stone, with readable implementations of
+// neural networks in several languages.
 
 import (
 	"encoding/csv"
