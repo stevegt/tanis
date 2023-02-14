@@ -122,7 +122,7 @@ func TestWeights(t *testing.T) {
 
 	// Ensure that squared error is calculated correctly (use rate=0 to avoid training)
 	case1 := NewTrainingCase([]float64{0.05, 0.1}, []float64{0.01, 0.99})
-	e := n.Train(case1, 0)
+	e := n.TrainOne(case1, 0)
 	// Pf("error: %v\n", e)
 	if math.Abs(e-0.298371109) > 0.0001 {
 		t.Log(e)
@@ -130,7 +130,7 @@ func TestWeights(t *testing.T) {
 
 	// Backpropagtion with rate 0.5
 	case2 := NewTrainingCase([]float64{0.05, 0.1}, []float64{0.01, 0.99})
-	e = n.Train(case2, 0.5)
+	e = n.TrainOne(case2, 0.5)
 	// Pf("error: %v\n", e)
 	// os.Exit(125)
 
@@ -214,7 +214,7 @@ func TestNetworkXor(t *testing.T) {
 		e = 0.0
 		for i := range x {
 			case1 := NewTrainingCase(x[i], y[i])
-			e = e + n.Train(case1, 1)
+			e = e + n.TrainOne(case1, 1)
 		}
 		if e < 0.02 {
 			return
@@ -238,7 +238,7 @@ func TestNetworkSinc(t *testing.T) {
 		for j := 0; j < 100; j++ {
 			x := rand.Float64()*10 - 5
 			case1 := NewTrainingCase([]float64{x}, []float64{sinc(x)})
-			e = e + n.Train(case1, 0.5)/100
+			e = e + n.TrainOne(case1, 0.5)/100
 		}
 		if e < 0.01 {
 			return
@@ -278,7 +278,7 @@ func TestIris(t *testing.T) {
 		e = 0.0
 		for i := 0; i < k; i++ {
 			case1 := NewTrainingCase(x[i], y[i])
-			e = e + n.Train(case1, 0.4)/float64(k)
+			e = e + n.TrainOne(case1, 0.4)/float64(k)
 		}
 		if e < 0.01 {
 			// Classify all data and print failures
@@ -294,16 +294,26 @@ func TestIris(t *testing.T) {
 	t.Error("failed to train", e)
 }
 
-func BenchmarkTrain(b *testing.B) {
-	n, _ := New(Dense(10, 1), Dense(3, 10), Dense(1, 3))
+func trainingBench(b *testing.B) {
+	width := 2000
+	n, _ := New(Dense(width, 1), Dense(width, width), Dense(width, width), Dense(1, width))
 	x := []float64{0}
 	y := []float64{0}
 	for i := 0; i < b.N; i++ {
 		x[0] = rand.Float64()*10 - 5
 		y[0] = math.Sin(x[0])
 		case1 := NewTrainingCase(x, y)
-		n.Train(case1, 0.5)
+		n.TrainOne(case1, 0.5)
 	}
+}
+
+func BenchmarkSingleThreaded(b *testing.B) {
+	trainingBench(b)
+}
+
+func BenchmarkMultiThreaded(b *testing.B) {
+	StartPool(3, 10)
+	trainingBench(b)
 }
 
 func loadCSV(filename string) (x [][]float64, y [][]float64) {
@@ -322,7 +332,7 @@ func loadCSV(filename string) (x [][]float64, y [][]float64) {
 	return x, y
 }
 
-func TestDumpLoad(t *testing.T) {
+func TestClone(t *testing.T) {
 	// Train an XOR network
 	x := [][]float64{{0, 0}, {0, 1}, {1, 0}, {1, 1}}
 	y := [][]float64{{0}, {1}, {1}, {0}}
@@ -335,7 +345,7 @@ func TestDumpLoad(t *testing.T) {
 		e = 0.0
 		for i := range x {
 			case1 := NewTrainingCase(x[i], y[i])
-			e = e + n.Train(case1, 1)
+			e = e + n.TrainOne(case1, 1)
 		}
 		if e < 0.02 {
 			break
@@ -345,12 +355,12 @@ func TestDumpLoad(t *testing.T) {
 		t.Error("failed to train", e)
 	}
 
-	// Save the network
-	txt := n.Dump()
+	// Clone the network
+	n2 := n.Clone("foo")
 
-	// Load the network
-	n2, err := Load(txt)
-	Tassert(t, err == nil, "Load failed", err)
+	Tassert(t, n2.Name == "foo", n2.Name)
+
+	// Tassert(t, err == nil, "Load failed", err)
 	// make some predictions
 	for i := range x {
 		z := n2.Predict(x[i])

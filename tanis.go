@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"math"
 	"math/rand"
+	"sync"
 
 	. "github.com/stevegt/goadapt"
 )
@@ -102,11 +103,13 @@ func main() {
 
 // Network represents a neural network
 type Network struct {
+	Name       string
 	InputCount int
 	Layers     []*Layer
 }
 
-// Init initializes a network by connecting the layers.
+// Init initializes a network by connecting the layers and starting
+// the worker pool.
 func (n *Network) Init() {
 	Assert(n.InputCount > 0)
 	layer0 := n.Layers[0]
@@ -123,9 +126,9 @@ func (n *Network) Init() {
 	}
 }
 
-// Dump serializes the network configuration, weights, and biases to a
+// Save serializes the network configuration, weights, and biases to a
 // JSON string.
-func (n *Network) Dump() string {
+func (n *Network) Save() string {
 	var buf []byte
 	buf, err := json.MarshalIndent(n, "", "  ")
 	Ck(err)
@@ -140,6 +143,15 @@ func Load(txt string) (n *Network, err error) {
 	err = json.Unmarshal([]byte(txt), &n)
 	Ck(err)
 	n.Init()
+	return
+}
+
+// Clone returns a deep copy of the network, giving it a new name.
+func (n *Network) Clone(newName string) (clone *Network) {
+	txt := n.Save()
+	clone, err := Load(txt)
+	Ck(err)
+	clone.Name = newName
 	return
 }
 
@@ -176,6 +188,7 @@ type Layer struct {
 	Nodes    []*Node
 	inputs   []float64
 	upstream *Layer
+	net      *Network
 }
 
 // Init initializes a layer by connecting it to the upstream layer.
@@ -226,7 +239,6 @@ func (l *Layer) SetInputs(inputs []float64) {
 }
 
 // Node represents a node in a neural network.
-// XXX make serializable
 type Node struct {
 	Weights        []float64 // weights for the inputs of this node
 	Bias           float64   // bias for this node
@@ -238,9 +250,7 @@ type Node struct {
 	// set the pointer to nil when the node is modified
 	output float64
 	cached bool
-	// XXX add an errors slice, set it to nil when the node is
-	// modified, and use it in Backprop() instead of passing errors
-	// as an argument
+	lock   sync.Mutex
 }
 
 // NewNode creates a new node.  The arguments are the activation
@@ -288,24 +298,90 @@ func (n *Node) SetWeights(weights []float64) {
 	copy(n.Weights, weights)
 }
 
+var pool *Pool
+
+// Pool is a worker pool for executing arbitrary functions in parallel
+// without filling RAM.
+type Pool struct {
+	// Number of workers in the pool.
+	Workers int
+	// Queue of functions to execute.
+	Queue chan func()
+}
+
+// worker is a Pool worker.
+func worker(pool *Pool) {
+	for f := range pool.Queue {
+		f()
+	}
+}
+
+// StartPool starts a global worker pool with the given number of workers.
+func StartPool(workers, queuesize int) {
+	pool = &Pool{
+		Workers: workers,
+		Queue:   make(chan func(), queuesize),
+	}
+	for i := 0; i < workers; i++ {
+		go worker(pool)
+		Pl("started worker", i)
+	}
+}
+
 // Inputs returns either the input values of the current layer
-// or the output values of the upstream layer.
+// or the output values of the upstream layer.  If we need to fetch
+// values from the upstream layer, we spawn a goroutine for each
+// upstream node to parallelize the computations.
 func (l *Layer) Inputs() (inputs []float64) {
 	if l.upstream == nil {
 		Assert(len(l.inputs) > 0, "layer: %#v", l)
 		inputs = l.inputs
 	} else {
 		Assert(len(l.inputs) == 0, Spf("layer: %#v", l))
-		for _, upstreamNode := range l.upstream.Nodes {
-			inputs = append(inputs, upstreamNode.Output())
+		// singleThreaded := false
+		if pool == nil {
+			// single-threaded
+			for _, upstreamNode := range l.upstream.Nodes {
+				inputs = append(inputs, upstreamNode.Output())
+			}
+		} else {
+			// parallelized using the worker pool
+			// create slice of channels to receive the output values
+			outputChans := make([]chan float64, len(l.upstream.Nodes))
+			// iterate over upstream nodes and spawn a goroutine for each
+			go func() {
+				for i, upstreamNode := range l.upstream.Nodes {
+					outputChan := make(chan float64)
+					outputChans[i] = outputChan
+					pool.Queue <- mkWorker(outputChan, upstreamNode)
+				}
+			}()
+			// iterate over the channels and get the output values
+			for _, outputChan := range outputChans {
+				inputs = append(inputs, <-outputChan)
+			}
 		}
 	}
 	return
 }
 
+// mkWorker creates a worker function for the given output channel and
+// node.
+func mkWorker(outputChan chan float64, node *Node) func() {
+	return func() {
+		// send the output value to the channel
+		Pf("running worker %p\n", node)
+		outputChan <- node.Output()
+		Pf("worker done %p\n", node)
+	}
+}
+
 // Output executes the forward function of a node and returns its
 // output value.
 func (n *Node) Output() (output float64) {
+	// lock the node so that only one goroutine can access it at a time
+	n.lock.Lock()
+	defer n.lock.Unlock()
 	if !n.cached {
 		inputs := n.layer.Inputs()
 		weightedSum := 0.0
@@ -348,10 +424,10 @@ func NewTrainingCase(inputs, targets []float64) (c *TrainingCase) {
 	return
 }
 
-// Train runs one backpropagation iteration through the network. It
+// TrainOne runs one backpropagation iteration through the network. It
 // takes a training case as input and returns the total error cost of
 // the output nodes.
-func (n *Network) Train(trainingCase *TrainingCase, learningRate float64) (cost float64) {
+func (n *Network) TrainOne(trainingCase *TrainingCase, learningRate float64) (cost float64) {
 
 	// provide inputs, get outputs
 	outputs := n.Predict(trainingCase.Inputs)
