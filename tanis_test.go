@@ -311,10 +311,12 @@ func BenchmarkSingleThreaded(b *testing.B) {
 	trainingBench(b)
 }
 
+/*
 func BenchmarkMultiThreaded(b *testing.B) {
 	StartPool(3, 10)
 	trainingBench(b)
 }
+*/
 
 func loadCSV(filename string) (x [][]float64, y [][]float64) {
 	f, _ := os.Open(filename)

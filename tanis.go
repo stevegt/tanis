@@ -108,8 +108,7 @@ type Network struct {
 	Layers     []*Layer
 }
 
-// Init initializes a network by connecting the layers and starting
-// the worker pool.
+// Init initializes a network by connecting the layers.
 func (n *Network) Init() {
 	Assert(n.InputCount > 0)
 	layer0 := n.Layers[0]
@@ -188,7 +187,6 @@ type Layer struct {
 	Nodes    []*Node
 	inputs   []float64
 	upstream *Layer
-	net      *Network
 }
 
 // Init initializes a layer by connecting it to the upstream layer.
@@ -298,82 +296,19 @@ func (n *Node) SetWeights(weights []float64) {
 	copy(n.Weights, weights)
 }
 
-var pool *Pool
-
-// Pool is a worker pool for executing arbitrary functions in parallel
-// without filling RAM.
-type Pool struct {
-	// Number of workers in the pool.
-	Workers int
-	// Queue of functions to execute.
-	Queue chan func()
-}
-
-// worker is a Pool worker.
-func worker(pool *Pool) {
-	for f := range pool.Queue {
-		f()
-	}
-}
-
-// StartPool starts a global worker pool with the given number of workers.
-func StartPool(workers, queuesize int) {
-	pool = &Pool{
-		Workers: workers,
-		Queue:   make(chan func(), queuesize),
-	}
-	for i := 0; i < workers; i++ {
-		go worker(pool)
-		Pl("started worker", i)
-	}
-}
-
 // Inputs returns either the input values of the current layer
-// or the output values of the upstream layer.  If we need to fetch
-// values from the upstream layer, we spawn a goroutine for each
-// upstream node to parallelize the computations.
+// or the output values of the upstream layer.
 func (l *Layer) Inputs() (inputs []float64) {
 	if l.upstream == nil {
 		Assert(len(l.inputs) > 0, "layer: %#v", l)
 		inputs = l.inputs
 	} else {
 		Assert(len(l.inputs) == 0, Spf("layer: %#v", l))
-		// singleThreaded := false
-		if pool == nil {
-			// single-threaded
-			for _, upstreamNode := range l.upstream.Nodes {
-				inputs = append(inputs, upstreamNode.Output())
-			}
-		} else {
-			// parallelized using the worker pool
-			// create slice of channels to receive the output values
-			outputChans := make([]chan float64, len(l.upstream.Nodes))
-			// iterate over upstream nodes and spawn a goroutine for each
-			go func() {
-				for i, upstreamNode := range l.upstream.Nodes {
-					outputChan := make(chan float64)
-					outputChans[i] = outputChan
-					pool.Queue <- mkWorker(outputChan, upstreamNode)
-				}
-			}()
-			// iterate over the channels and get the output values
-			for _, outputChan := range outputChans {
-				inputs = append(inputs, <-outputChan)
-			}
+		for _, upstreamNode := range l.upstream.Nodes {
+			inputs = append(inputs, upstreamNode.Output())
 		}
 	}
 	return
-}
-
-// mkWorker creates a worker function for the given output channel and
-// node.
-func mkWorker(outputChan chan float64, node *Node) func() {
-	return func() {
-		// send the output value to the channel
-		Pf("running worker %p\n", node)
-		outputChan <- node.Output()
-		Pf("worker done %p\n", node)
-	}
 }
 
 // Output executes the forward function of a node and returns its
