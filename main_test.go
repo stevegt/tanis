@@ -28,7 +28,7 @@ func TestSigmoid(t *testing.T) {
 func Dense(nodes, inputs int) (layer *Layer) {
 	layer = &Layer{}
 	for i := 0; i < nodes; i++ {
-		node := NewNode(sigmoid, sigmoidD1)
+		node := NewNode("sigmoid")
 		layer.Nodes = append(layer.Nodes, node)
 	}
 	layer.Init(inputs, nil)
@@ -314,4 +314,48 @@ func loadCSV(filename string) (x [][]float64, y [][]float64) {
 		y = append(y, nums[len(nums)-1:])
 	}
 	return x, y
+}
+
+func TestDumpLoad(t *testing.T) {
+	// Train an XOR network
+	x := [][]float64{{0, 0}, {0, 1}, {1, 0}, {1, 1}}
+	y := [][]float64{{0}, {1}, {1}, {0}}
+	n, _ := New(Dense(4, 2), Dense(1, 4))
+	// Pprint(n)
+	// os.Exit(200)
+	// Train for several epochs, or until the error is less than 2%
+	var e float64
+	for epoch := 0; epoch < 10000; epoch++ {
+		e = 0.0
+		for i := range x {
+			case1 := NewTrainingCase(x[i], y[i])
+			e = e + n.Train(case1, 1)
+		}
+		if e < 0.02 {
+			break
+		}
+	}
+	if e > 0.02 {
+		t.Error("failed to train", e)
+	}
+
+	// Save the network
+	txt := n.Dump()
+
+	// Load the network
+	n2, err := Load(txt)
+	Tassert(t, err == nil, "Load failed", err)
+	// make some predictions
+	for i := range x {
+		z := n2.Predict(x[i])
+		if z[0] < 0.5 {
+			z[0] = 0
+		} else {
+			z[0] = 1
+		}
+		if z[0] != y[i][0] {
+			t.Error("failed to predict", x[i], z[0], y[i][0])
+		}
+	}
+
 }

@@ -1,21 +1,32 @@
 package general
 
 import (
+	"encoding/json"
 	"math"
 	"math/rand"
 
 	. "github.com/stevegt/goadapt"
 )
 
-// Activation function
+// sigmoid activation function
 func sigmoid(x float64) float64 {
 	return 1.0 / (1.0 + math.Exp(-x))
 }
 
-// Derivative of the activation function
+// sigmoid derivative
 func sigmoidD1(x float64) float64 {
 	// return math.Exp(-x) / math.Pow(1+math.Exp(-x), 2)
 	return x * (1 - x)
+}
+
+// tanh activation function
+func tanh(x float64) float64 {
+	return math.Tanh(x)
+}
+
+// tanh derivative
+func tanhD1(x float64) float64 {
+	return 1 - math.Pow(math.Tanh(x), 2)
 }
 
 /*
@@ -102,12 +113,34 @@ func (n *Network) Init() {
 	layer0.Init(n.InputCount, nil)
 	for i := 1; i < len(n.Layers); i++ {
 		layer := n.Layers[i]
-		// XXX workaround for the fact that the test cases always
-		// create an input slice even if it's not going to be used.
+		// The test cases always create an input slice even if it's
+		// not going to be used. Since we're in a downstream layer
+		// here, we don't need the input slice, so we can set it to
+		// nil.
 		layer.inputs = nil
 		upstreamLayer := n.Layers[i-1]
 		layer.Init(0, upstreamLayer)
 	}
+}
+
+// Dump serializes the network configuration, weights, and biases to a
+// JSON string.
+func (n *Network) Dump() string {
+	var buf []byte
+	buf, err := json.MarshalIndent(n, "", "  ")
+	Ck(err)
+	return string(buf)
+}
+
+// Load deserializes a network configuration, weights, and biases from
+// a JSON string.
+func Load(txt string) (n *Network, err error) {
+	Return(&err)
+	n = &Network{}
+	err = json.Unmarshal([]byte(txt), &n)
+	Ck(err)
+	n.Init()
+	return
 }
 
 // Predict executes the forward function of a network and returns its
@@ -147,8 +180,8 @@ type Layer struct {
 
 // Init initializes a layer by connecting it to the upstream layer.
 func (l *Layer) Init(inputs int, upstream *Layer) {
-	// allow for test cases to pre-set inputs
-	// XXX deprecate this conditional
+	// allow for test cases to pre-set inputs by only creating the
+	// inputs slice if it's not already set
 	if inputs > 0 && l.inputs == nil {
 		l.inputs = make([]float64, inputs)
 	}
@@ -195,11 +228,12 @@ func (l *Layer) SetInputs(inputs []float64) {
 // Node represents a node in a neural network.
 // XXX make serializable
 type Node struct {
-	Weights      []float64 // weights for the inputs of this node
-	Bias         float64   // bias for this node
-	layer        *Layer    // layer this node belongs to
-	activation   func(float64) float64
-	activationD1 func(float64) float64
+	Weights        []float64 // weights for the inputs of this node
+	Bias           float64   // bias for this node
+	ActivationName string    // name of the activation function
+	layer          *Layer    // layer this node belongs to
+	activation     func(float64) float64
+	activationD1   func(float64) float64
 	// XXX remove cached, replace output with a pointer to a float64, and
 	// set the pointer to nil when the node is modified
 	output float64
@@ -211,21 +245,37 @@ type Node struct {
 
 // NewNode creates a new node.  The arguments are the activation
 // function and its derivative.
-func NewNode(activation func(float64) float64, activationD1 func(float64) float64) (n *Node) {
-	n = &Node{}
-	Assert(activation != nil)
-	Assert(activationD1 != nil)
-	n.activation = activation
-	n.activationD1 = activationD1
+func NewNode(activationName string) (n *Node) {
+	n = &Node{ActivationName: activationName}
+	return
+}
+
+// activationFuncs returns the activation function and its derivative
+// for the given name.
+func activationFuncs(name string) (activation, activationD1 func(float64) float64) {
+	switch name {
+	case "sigmoid":
+		activation = sigmoid
+		activationD1 = sigmoidD1
+	case "tanh":
+		activation = tanh
+		activationD1 = tanhD1
+	}
 	return
 }
 
 // Init initializes a node by connecting it to the upstream layer and
 // creating a weight slot for each upstream node.
 func (n *Node) Init(layer *Layer) {
+	activation, activationD1 := activationFuncs(n.ActivationName)
+	Assert(activation != nil)
+	Assert(activationD1 != nil)
+	n.activation = activation
+	n.activationD1 = activationD1
+
 	n.layer = layer
-	// allow for test cases to pre-set weights
-	// XXX deprecate this conditional
+	// allow for test cases to pre-set weights by only creating the
+	// weights slice if it's not already set
 	if n.Weights == nil {
 		n.Weights = make([]float64, len(layer.Inputs()))
 	}
@@ -274,8 +324,6 @@ func (n *Node) Output() (output float64) {
 
 func (n *Node) Randomize() {
 	for i := range n.Weights {
-		// n.Weights[i] = min + rand.Float64()*(max-min)
-		// XXX
 		n.Weights[i] = rand.Float64()*2 - 1
 	}
 	n.Bias = rand.Float64()*2 - 1
@@ -317,6 +365,7 @@ func (n *Network) Train(trainingCase *TrainingCase, learningRate float64) (cost 
 		//
 		// cost = 0.5 * (y - x)^2
 		// dcost/dx = y - x
+		// XXX DcostDoutput
 		errors[i] = target - outputs[i]
 		// accumulate total cost
 		cost += 0.5 * math.Pow(target-outputs[i], 2)
@@ -332,6 +381,41 @@ func (n *Network) Train(trainingCase *TrainingCase, learningRate float64) (cost 
 	return
 }
 
+// InputErrors returns the errors for the inputs of the given layer
+func (l *Layer) InputErrors(outputErrors []float64) (inputErrors []float64) {
+	Assert(len(outputErrors) == len(l.Nodes))
+	inputErrors = make([]float64, len(l.Inputs()))
+	for i, node := range l.Nodes {
+		node.AddInputErrors(outputErrors[i], inputErrors)
+	}
+	return
+}
+
+// AddInputErrors adds the errors for the inputs of this node to the
+// given inputErrors slice, updating the slice in place.
+func (n *Node) AddInputErrors(outputError float64, inputErrors []float64) {
+	Assert(len(inputErrors) == len(n.Weights))
+	for i, weight := range n.Weights {
+		delta := outputError * n.activationD1(n.Output())
+		inputErrors[i] += weight * delta
+	}
+}
+
+// UpdateWeights updates the weights of this node
+func (n *Node) UpdateWeights(outputError float64, inputs []float64, learningRate float64) {
+	for j, input := range inputs {
+		// update the weight for the j-th input to this node
+		n.Weights[j] += learningRate * outputError * n.activationD1(n.Output()) * input
+	}
+	// update the bias
+	n.Bias += learningRate * outputError * n.activationD1(n.Output())
+	// Debug("Backprop: node %d errs %v weights %v, bias %v", i, outputErrs, node.Weights, node.Bias)
+
+	// mark cache dirty last so we only use the old output value
+	// in the above calculations
+	n.cached = false
+}
+
 // Backprop performs backpropagation on a layer.  It takes a vector of
 // errors as input, updates the weights of the nodes in the layer, and
 // recurses to the upstream layer.
@@ -342,50 +426,29 @@ func (l *Layer) Backprop(outputErrs []float64, learningRate float64) {
 	// Pf("Backprop: outputErrs: %v layer: %#v\n", outputErrs, l)
 
 	// update the errors for the inputs to this layer
-	upstreamErrs := make([]float64, len(l.Inputs()))
-	for i, node := range l.Nodes {
-		for j, _ := range l.Inputs() {
-			weight := node.Weights[j]
-			delta := outputErrs[i] * node.activationD1(node.Output())
-			upstreamErrs[j] += weight * delta
-			// Pf("Backprop: i: %v j: %v weight: %v outputErrs[i]: %v dactFn: %v outputs[i]: %v delta: %v\n", i, j, weight, outputErrs[i], node.activationD1(node.Output()), node.Output(), delta)
-		}
-	}
+	inputErrors := l.InputErrors(outputErrs)
 
 	// update the weights for the inputs to this layer
 	for i, node := range l.Nodes {
-		for j, input := range l.Inputs() {
-			// update the weight for the j-th input to this node
-			node.Weights[j] += learningRate * outputErrs[i] * node.activationD1(node.Output()) * input
-		}
-		// update the bias
-		node.Bias += learningRate * outputErrs[i] * node.activationD1(node.Output())
-		// mark cache dirty last so we only use the old output value
-		// in the above calculations
-		Debug("Backprop: node %d errs %v weights %v, bias %v", i, outputErrs, node.Weights, node.Bias)
-		node.cached = false
+		node.UpdateWeights(outputErrs[i], l.Inputs(), learningRate)
 	}
 
 	if l.upstream != nil {
 		// recurse to the upstream layer
-		l.upstream.Backprop(upstreamErrs, learningRate)
+		l.upstream.Backprop(inputErrors, learningRate)
 	}
 }
 
 /*
 
-XXX move the following documentation into backprop
+XXX reconcile the following docs with the above
 
-
-
-
-
-	n.cached = false
-	// We use the chain rule to calculate the partial derivative of the
-	// cost with respect to the weights of the upstream nodes.
+	// We use the chain rule to calculate the partial derivative of the cost
+	// function with respect to the weight:
 	//
-	// dcost/dweight = dcost/doutput * doutput/dweightedsum * dweightedsum/dweight
-
+	// XXX
+	// dcost/dweight = dcost/doutput * doutput/dweight
+	//
 	// The cost function is the sum of the squares of the errors.  We
 	// multiply by 0.5 to simplify the derivative.
 	//
@@ -395,13 +458,16 @@ XXX move the following documentation into backprop
 	// is simply (target - output).
 	//
 	// dcost/doutput = target - output
-	dcost_doutput := target - n.Output()
 
-	// The derivative of the output with respect to the weighted sum
-	// is the derivative of the activation function.
-	//
-	// doutput/dweightedsum = activationD1(weightedsum)
-	doutput_dweightedsum := n.ActivationD1(n.WeightedSum)
+	// The derivative of the output with respect to the weighted input
+	// is the derivative of the activation function. Why?  Because
+	// the output is the weighted sum of the inputs, which is the
+	// XXX
+
+
+
+	// XXX
+	// doutput/dweight = activationD1(output)
 
 	// The derivative of the weighted sum with respect to a weight is
 	// the output of the related upstream node.  Why?  Because the
@@ -410,7 +476,7 @@ XXX move the following documentation into backprop
 	// example we only had one upstream node, then the weighted sum
 	// would be:
 	//
-	// weightedsum = weight * upstreamNode.Output()
+	// weightedsum = weight * input
 	//
 	// We can't change the upstream node output, so we can only change
 	// the weight.  So we can think of the above equation in the form
@@ -419,31 +485,22 @@ XXX move the following documentation into backprop
 	// y = mx + b
 	//
 	// where y is the weighted sum, m is the weight, x is the upstream
-	// node output, and b is the bias.  We use bias nodes in this
-	// library to represent the bias term, so we can simplify the
-	// equation to:
-	//
-	// y = mx
+	// node output, and b is the bias.
 	//
 	// The derivative of that equation with respect to m is x:
 	//
 	// dy/dm = x
 	//
 	// So the derivative of the weighted sum with respect to a weight
-	// is the output of the related upstream node:
+	// is simply the input to the node.
 	//
-	// dweightedsum/dweight = upstreamNode.Output()
-	//
-	// We can generalize this to multiple upstream nodes:
-	//
-	// for i in range(len(upstreamNodes)):
-	//     dweightedsum/dweight[i] = upstreamNodes[i].Output()
+	// dweightedsum/dweight = input
 	//
 	// So going back to the original equation using the partial
 	// derivatives in the chain rule:
 	//
 	// dcost/dweight = dcost/doutput * doutput/dweightedsum * dweightedsum/dweight
-	//               = (target - output) * activationD1(weightedsum) * upstreamNode.Output()
+	//               = (target - output) * activationD1(output) * input
 	//
 	// Let's do it in code:
 	for i, upstreamNode := range n.Upstream {
@@ -461,120 +518,4 @@ XXX move the following documentation into backprop
 		// Now we can call the upstream node's backprop function:
 		upstreamNode.Backprop(targetUpstream)
 	}
-}
-
-/*
-// Target returns the target value for this node, given the partial
-// derivatives from the downstream node's backprop function.
-func (n *Node) Target(dweightedsum_dweight float64) (target float64) {
-	// We have the predicted output of this node, and we have the downstream
-	// node's partial derivatives.  We need to work backwards to find the
-	// target value for this node.
-	//
-	// dcost/doutput = target - output
-	// target = dcost/doutput + output
-	//
-	// We can get dcost/doutput from the chain rule:
-	//
-
-
-
-
-
-	// partial derivatives of the cost function with respect to the
-
-	// The target for this node is the partial derivative of the cost
-	// with respect to the output of this node, multiplied by the
-
-
-
-
-		// We have the
-		// predicted output of the upstream node, but we need to work
-		// backwards to get the upstream node's target:
-		//
-		// dcost/doutputUpstream = targetUpstream - outputUpstream
-		// targetUpstream = outputUpstream + dcost/doutputUpstream
-		//
-		// So we need to calculate dcost/doutputUpstream.  We can do
-		// this by using the chain rule again:
-		//
-		// dcost/doutputUpstream = dcost/doutput * doutput/doutputUpstream
-		//
-		// We already calculated dcost/doutput, so we just need to
-		// calculate doutput/doutputUpstream:
-		//
-		// doutput/doutputUpstream = doutput/dweightedsum *
-
-
-		//
-
-
-
-		//
-		// Okay, so we need to calculate dcost/doutputUpstream.  We
-		// can do this by using the chain rule:
-		//
-
-
-
-
-
-
-
-		targetUpstream := dcost_doutput * doutput_dweightedsum * n.Weights[i]
-
-
-
-
-
-
-
-
-		We can use the
-		// chain rule to calculate the partial derivative of the cost
-		// with respect to the upstream node output.
-		//
-		// dcost/dupstreamNodeOutput = dcost/doutput * doutput/dweightedsum * dweightedsum/dupstreamNodeOutput
-
-
-		We can get
-		// this by multiplying the derivative of the weighted sum
-		// with respect to the upstream node output by the derivative
-		// of the cost with respect to the weighted sum.
-		//
-		// dweightedsum/dupstreamNodeOutput = weight
-		// dcost/dweightedsum = dcost/doutput * doutput/dweightedsum
-		// dcost/dupstreamNodeOutput = dcost/dweightedsum * dweightedsum/dupstreamNodeOutput
-		//                           = dcost/doutput * doutput/dweightedsum * weight
-		dcost_dupstreamNodeOutput := dcost_doutput * doutput_dweightedsum * n.Weights[i]
-
-		// recursively call backprop on upstream node
-		upstreamTarget := dcost_doutput * doutput_dweightedsum * n.Weights[i]
-		upstreamNode.Backprop()
-	}
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-	// calculate delta
-	delta := err * n.ActivationD1(n.Output)
-	// adjust weights
-	for i, upstreamNode := range n.Upstream {
-		upstreamNode.Weights[i] += delta * upstreamNode.Output
-	}
-	// adjust bias
-	n.Input += delta
-}
-
 */
