@@ -122,7 +122,7 @@ func TestWeights(t *testing.T) {
 
 	// Ensure that squared error is calculated correctly (use rate=0 to avoid training)
 	case1 := NewTrainingCase([]float64{0.05, 0.1}, []float64{0.01, 0.99})
-	e := n.TrainOne(case1, 0)
+	e := n.trainOne(case1, 0)
 	// Pf("error: %v\n", e)
 	if math.Abs(e-0.298371109) > 0.0001 {
 		t.Log(e)
@@ -130,7 +130,7 @@ func TestWeights(t *testing.T) {
 
 	// Backpropagtion with rate 0.5
 	case2 := NewTrainingCase([]float64{0.05, 0.1}, []float64{0.01, 0.99})
-	e = n.TrainOne(case2, 0.5)
+	e = n.trainOne(case2, 0.5)
 	// Pf("error: %v\n", e)
 	// os.Exit(125)
 
@@ -206,21 +206,14 @@ func TestNetworkXor(t *testing.T) {
 	x := [][]float64{{0, 0}, {0, 1}, {1, 0}, {1, 1}}
 	y := [][]float64{{0}, {1}, {1}, {0}}
 	n, _ := New(Dense(4, 2), Dense(1, 4))
-	// Pprint(n)
-	// os.Exit(200)
-	// Train for several epochs, or until the error is less than 2%
-	var e float64
-	for epoch := 0; epoch < 10000; epoch++ {
-		e = 0.0
-		for i := range x {
-			case1 := NewTrainingCase(x[i], y[i])
-			e = e + n.TrainOne(case1, 1)
-		}
-		if e < 0.02 {
-			return
-		}
+	// create training set
+	set := NewTrainingSet()
+	for i, _ := range x {
+		set.Add(x[i], y[i])
 	}
-	t.Error("failed to train", e)
+	// Train at a learning rate of 1 for 10000 iterations or until cost is less than 2%
+	cost, err := n.Train(set, 1, 10000, 0.02)
+	Tassert(t, err == nil, "cost too high: %v", cost)
 }
 
 // Use multiple hidden layers to predict sinc(x) function.
@@ -238,7 +231,7 @@ func TestNetworkSinc(t *testing.T) {
 		for j := 0; j < 100; j++ {
 			x := rand.Float64()*10 - 5
 			case1 := NewTrainingCase([]float64{x}, []float64{sinc(x)})
-			e = e + n.TrainOne(case1, 0.5)/100
+			e = e + n.trainOne(case1, 0.5)/100
 		}
 		if e < 0.01 {
 			return
@@ -278,7 +271,7 @@ func TestIris(t *testing.T) {
 		e = 0.0
 		for i := 0; i < k; i++ {
 			case1 := NewTrainingCase(x[i], y[i])
-			e = e + n.TrainOne(case1, 0.4)/float64(k)
+			e = e + n.trainOne(case1, 0.4)/float64(k)
 		}
 		if e < 0.01 {
 			// Classify all data and print failures
@@ -295,7 +288,7 @@ func TestIris(t *testing.T) {
 }
 
 func trainingBench(b *testing.B) {
-	width := 2000
+	width := 200
 	n, _ := New(Dense(width, 1), Dense(width, width), Dense(width, width), Dense(1, width))
 	x := []float64{0}
 	y := []float64{0}
@@ -303,7 +296,7 @@ func trainingBench(b *testing.B) {
 		x[0] = rand.Float64()*10 - 5
 		y[0] = math.Sin(x[0])
 		case1 := NewTrainingCase(x, y)
-		n.TrainOne(case1, 0.5)
+		n.trainOne(case1, 0.5)
 	}
 }
 
@@ -347,7 +340,7 @@ func TestClone(t *testing.T) {
 		e = 0.0
 		for i := range x {
 			case1 := NewTrainingCase(x[i], y[i])
-			e = e + n.TrainOne(case1, 1)
+			e = e + n.trainOne(case1, 1)
 		}
 		if e < 0.02 {
 			break

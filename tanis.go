@@ -2,6 +2,7 @@ package tanis
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"math/rand"
 	"sync"
@@ -106,10 +107,14 @@ type Network struct {
 	Name       string
 	InputCount int
 	Layers     []*Layer
+	lock       sync.Mutex
 }
 
 // Init initializes a network by connecting the layers.
 func (n *Network) Init() {
+	n.lock.Lock()
+	defer n.lock.Unlock()
+
 	Assert(n.InputCount > 0)
 	layer0 := n.Layers[0]
 	layer0.Init(n.InputCount, nil)
@@ -128,6 +133,9 @@ func (n *Network) Init() {
 // Save serializes the network configuration, weights, and biases to a
 // JSON string.
 func (n *Network) Save() string {
+	n.lock.Lock()
+	defer n.lock.Unlock()
+
 	var buf []byte
 	buf, err := json.MarshalIndent(n, "", "  ")
 	Ck(err)
@@ -147,6 +155,7 @@ func Load(txt string) (n *Network, err error) {
 
 // Clone returns a deep copy of the network, giving it a new name.
 func (n *Network) Clone(newName string) (clone *Network) {
+	// lock not needed here because Save() locks
 	txt := n.Save()
 	clone, err := Load(txt)
 	Ck(err)
@@ -157,6 +166,13 @@ func (n *Network) Clone(newName string) (clone *Network) {
 // Predict executes the forward function of a network and returns its
 // output values.
 func (n *Network) Predict(inputs []float64) (outputs []float64) {
+	n.lock.Lock()
+	defer n.lock.Unlock()
+	outputs = n.predict(inputs)
+	return
+}
+
+func (n *Network) predict(inputs []float64) (outputs []float64) {
 	// clear caches
 	for _, layer := range n.Layers {
 		for _, node := range layer.Nodes {
@@ -177,6 +193,8 @@ func (n *Network) Predict(inputs []float64) (outputs []float64) {
 // RandomizeWeights sets the weights of all nodes to random values
 // between min and max.
 func (n *Network) Randomize() {
+	n.lock.Lock()
+	defer n.lock.Unlock()
 	for _, layer := range n.Layers {
 		layer.Randomize()
 	}
@@ -345,6 +363,17 @@ type TrainingSet struct {
 	Cases []*TrainingCase
 }
 
+// NewTrainingSet creates a new training set.
+func NewTrainingSet() (ts *TrainingSet) {
+	ts = &TrainingSet{}
+	return
+}
+
+// Add adds a training case to the set.
+func (ts *TrainingSet) Add(inputs, targets []float64) {
+	ts.Cases = append(ts.Cases, &TrainingCase{Inputs: inputs, Targets: targets})
+}
+
 // TrainingCase represents a single training case.
 type TrainingCase struct {
 	Inputs  []float64
@@ -359,13 +388,30 @@ func NewTrainingCase(inputs, targets []float64) (c *TrainingCase) {
 	return
 }
 
-// TrainOne runs one backpropagation iteration through the network. It
+// Train the network given a training set.
+func (n *Network) Train(trainingSet *TrainingSet, learningRate float64, iterations int, maxCost float64) (cost float64, err error) {
+	n.lock.Lock()
+	defer n.lock.Unlock()
+
+	for i := 0; i < iterations; i++ {
+		cost = 0.0
+		for _, trainingCase := range trainingSet.Cases {
+			cost += n.trainOne(trainingCase, learningRate)
+		}
+		cost /= float64(len(trainingSet.Cases))
+		if cost < maxCost {
+			return cost, nil
+		}
+	}
+	return cost, fmt.Errorf("max iterations reached")
+}
+
+// trainOne runs one backpropagation iteration through the network. It
 // takes a training case as input and returns the total error cost of
 // the output nodes.
-func (n *Network) TrainOne(trainingCase *TrainingCase, learningRate float64) (cost float64) {
-
+func (n *Network) trainOne(trainingCase *TrainingCase, learningRate float64) (cost float64) {
 	// provide inputs, get outputs
-	outputs := n.Predict(trainingCase.Inputs)
+	outputs := n.predict(trainingCase.Inputs)
 
 	// initialize the error vector with the output errors
 	errors := make([]float64, len(outputs))
