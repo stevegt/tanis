@@ -110,14 +110,14 @@ type Network struct {
 	lock       sync.Mutex
 }
 
-// Init initializes a network by connecting the layers.
-func (n *Network) Init() {
+// init initializes a network by connecting the layers.
+func (n *Network) init() {
 	n.lock.Lock()
 	defer n.lock.Unlock()
 
 	Assert(n.InputCount > 0)
 	layer0 := n.Layers[0]
-	layer0.Init(n.InputCount, nil)
+	layer0.init(n.InputCount, nil)
 	for i := 1; i < len(n.Layers); i++ {
 		layer := n.Layers[i]
 		// The test cases always create an input slice even if it's
@@ -126,7 +126,7 @@ func (n *Network) Init() {
 		// nil.
 		layer.inputs = nil
 		upstreamLayer := n.Layers[i-1]
-		layer.Init(0, upstreamLayer)
+		layer.init(0, upstreamLayer)
 	}
 }
 
@@ -149,7 +149,41 @@ func Load(txt string) (n *Network, err error) {
 	n = &Network{}
 	err = json.Unmarshal([]byte(txt), &n)
 	Ck(err)
-	n.Init()
+	n.init()
+	return
+}
+
+// NewNetwork creates a new network with the given configuration.  The
+// configuration is a slice of integers, where each integer is the
+// number of nodes in a layer. The first integer is the number of
+// inputs, and the last integer is the number of outputs.  The
+// activation function defaults to sigmoid.
+func NewNetwork(name string, conf ...int) (n *Network) {
+	n = &Network{
+		Name:       name,
+		InputCount: conf[0],
+		Layers:     make([]*Layer, len(conf)-1),
+	}
+	for i := 1; i < len(conf); i++ {
+		inputCount := conf[i-1]
+		nodeCount := conf[i]
+		n.Layers[i-1] = newLayer(inputCount, nodeCount, "sigmoid")
+	}
+	n.init()
+	n.Randomize()
+	return
+}
+
+// newLayer creates a new layer with the given number of inputs and
+// nodes.
+func newLayer(inputCount, nodeCount int, activationName string) (l *Layer) {
+	l = &Layer{
+		Nodes: make([]*Node, nodeCount),
+	}
+	for i := 0; i < nodeCount; i++ {
+		l.Nodes[i] = newNode(activationName)
+	}
+	l.init(inputCount, nil)
 	return
 }
 
@@ -181,22 +215,21 @@ func (n *Network) predict(inputs []float64) (outputs []float64) {
 	}
 	// set input values
 	inputLayer := n.Layers[0]
-	inputLayer.SetInputs(inputs)
+	inputLayer.setInputs(inputs)
 	// execute forward function
 	outputLayer := n.Layers[len(n.Layers)-1]
 	for _, outputNode := range outputLayer.Nodes {
-		outputs = append(outputs, outputNode.Output())
+		outputs = append(outputs, outputNode.getOutput())
 	}
 	return
 }
 
 // RandomizeWeights sets the weights of all nodes to random values
-// between min and max.
 func (n *Network) Randomize() {
 	n.lock.Lock()
 	defer n.lock.Unlock()
 	for _, layer := range n.Layers {
-		layer.Randomize()
+		layer.randomize()
 	}
 }
 
@@ -207,8 +240,8 @@ type Layer struct {
 	upstream *Layer
 }
 
-// Init initializes a layer by connecting it to the upstream layer.
-func (l *Layer) Init(inputs int, upstream *Layer) {
+// init initializes a layer by connecting it to the upstream layer.
+func (l *Layer) init(inputs int, upstream *Layer) {
 	// allow for test cases to pre-set inputs by only creating the
 	// inputs slice if it's not already set
 	if inputs > 0 && l.inputs == nil {
@@ -216,37 +249,37 @@ func (l *Layer) Init(inputs int, upstream *Layer) {
 	}
 	l.upstream = upstream
 	for _, node := range l.Nodes {
-		node.Init(l)
+		node.init(l)
 	}
 }
 
-// Randomize sets the weights and biases to random values.
-func (l *Layer) Randomize() {
+// randomize sets the weights and biases to random values.
+func (l *Layer) randomize() {
 	for _, node := range l.Nodes {
-		node.Randomize()
+		node.randomize()
 	}
 }
 
-// SetWeights sets the weights of all nodes to the given values.
-func (l *Layer) SetWeights(weights [][]float64) {
+// setWeights sets the weights of all nodes to the given values.
+func (l *Layer) setWeights(weights [][]float64) {
 	Assert(len(l.Nodes) == len(weights))
 	for i, node := range l.Nodes {
-		node.SetWeights(weights[i])
+		node.setWeights(weights[i])
 		node.cached = false
 	}
 }
 
 // SetBias accepts a slice of bias values and sets the bias of each
 // node to the corresponding value.
-func (l *Layer) SetBiases(bias []float64) {
+func (l *Layer) setBiases(bias []float64) {
 	for i, node := range l.Nodes {
 		node.Bias = bias[i]
 		node.cached = false
 	}
 }
 
-// SetInputs sets the input values of this layer to the given vector.
-func (l *Layer) SetInputs(inputs []float64) {
+// setInputs sets the input values of this layer to the given vector.
+func (l *Layer) setInputs(inputs []float64) {
 	Assert(l.upstream == nil)
 	l.inputs = inputs
 	for _, node := range l.Nodes {
@@ -269,9 +302,9 @@ type Node struct {
 	lock   sync.Mutex
 }
 
-// NewNode creates a new node.  The arguments are the activation
+// newNode creates a new node.  The arguments are the activation
 // function and its derivative.
-func NewNode(activationName string) (n *Node) {
+func newNode(activationName string) (n *Node) {
 	n = &Node{ActivationName: activationName}
 	return
 }
@@ -290,9 +323,9 @@ func activationFuncs(name string) (activation, activationD1 func(float64) float6
 	return
 }
 
-// Init initializes a node by connecting it to the upstream layer and
+// init initializes a node by connecting it to the upstream layer and
 // creating a weight slot for each upstream node.
-func (n *Node) Init(layer *Layer) {
+func (n *Node) init(layer *Layer) {
 	activation, activationD1 := activationFuncs(n.ActivationName)
 	Assert(activation != nil)
 	Assert(activationD1 != nil)
@@ -303,40 +336,40 @@ func (n *Node) Init(layer *Layer) {
 	// allow for test cases to pre-set weights by only creating the
 	// weights slice if it's not already set
 	if n.Weights == nil {
-		n.Weights = make([]float64, len(layer.Inputs()))
+		n.Weights = make([]float64, len(layer.getInputs()))
 	}
 }
 
-// SetWeights sets the weights of this node to the given values.
-func (n *Node) SetWeights(weights []float64) {
+// setWeights sets the weights of this node to the given values.
+func (n *Node) setWeights(weights []float64) {
 	// Assert(len(n.Weights) == len(weights), Spf("n.Weights: %v, weights: %v", n.Weights, weights))
 	Assert(len(n.Weights) == len(weights))
 	copy(n.Weights, weights)
 }
 
-// Inputs returns either the input values of the current layer
+// getInputs returns either the input values of the current layer
 // or the output values of the upstream layer.
-func (l *Layer) Inputs() (inputs []float64) {
+func (l *Layer) getInputs() (inputs []float64) {
 	if l.upstream == nil {
 		Assert(len(l.inputs) > 0, "layer: %#v", l)
 		inputs = l.inputs
 	} else {
 		Assert(len(l.inputs) == 0, Spf("layer: %#v", l))
 		for _, upstreamNode := range l.upstream.Nodes {
-			inputs = append(inputs, upstreamNode.Output())
+			inputs = append(inputs, upstreamNode.getOutput())
 		}
 	}
 	return
 }
 
-// Output executes the forward function of a node and returns its
+// getOutput executes the forward function of a node and returns its
 // output value.
-func (n *Node) Output() (output float64) {
+func (n *Node) getOutput() (output float64) {
 	// lock the node so that only one goroutine can access it at a time
 	n.lock.Lock()
 	defer n.lock.Unlock()
 	if !n.cached {
-		inputs := n.layer.Inputs()
+		inputs := n.layer.getInputs()
 		weightedSum := 0.0
 		// add weighted inputs
 		for i, input := range inputs {
@@ -351,7 +384,7 @@ func (n *Node) Output() (output float64) {
 	return n.output
 }
 
-func (n *Node) Randomize() {
+func (n *Node) randomize() {
 	for i := range n.Weights {
 		n.Weights[i] = rand.Float64()*2 - 1
 	}
@@ -366,6 +399,22 @@ type TrainingSet struct {
 // NewTrainingSet creates a new training set.
 func NewTrainingSet() (ts *TrainingSet) {
 	ts = &TrainingSet{}
+	return
+}
+
+// Validate validates a network against a training set, ensuring that
+// the network outputs are within maxCost of the expected outputs.
+func (n *Network) Validate(ts *TrainingSet, maxCost float64) (err error) {
+	for _, tc := range ts.Cases {
+		outputs := n.Predict(tc.Inputs)
+		cost := 0.0
+		for i, output := range outputs {
+			cost += math.Abs(output - tc.Targets[i])
+		}
+		if cost > maxCost {
+			return fmt.Errorf("cost too high for inputs: %v, expected: %v, got: %v", tc.Inputs, tc.Targets, outputs)
+		}
+	}
 	return
 }
 
@@ -385,6 +434,38 @@ func NewTrainingCase(inputs, targets []float64) (c *TrainingCase) {
 	c = &TrainingCase{}
 	c.Inputs = inputs
 	c.Targets = targets
+	return
+}
+
+// Mimic trains the network to match the outputs of oldNet given
+// trainingSet inputs.  Ignores the target values in trainingSet; instead
+// asks oldNet to predict output values for trainingSet inputs, then
+// uses those output values as targets for training the network.
+func (n *Network) Mimic(oldNet *Network, trainingSet *TrainingSet, learningRate float64, iterations int, maxCost float64) (cost float64, err error) {
+	// build a new training set by asking oldNet to predict the outputs
+	newSet := oldNet.MkTrainingSet(trainingSet)
+	// train the network to match the outputs of oldNet
+	cost, err = n.Train(newSet, learningRate, iterations, maxCost)
+	return
+}
+
+// MkTrainingSet creates a new training set by running the given inputs through
+// the network.  The targets in the input training set are ignored.
+func (n *Network) MkTrainingSet(trainingSet *TrainingSet) (newSet *TrainingSet) {
+	newSet = NewTrainingSet()
+	for _, tc := range trainingSet.Cases {
+		outputs := n.Predict(tc.Inputs)
+		newSet.Add(tc.Inputs, outputs)
+	}
+	return
+}
+
+// Append appends the given training set to the current training set,
+// returning a new training set.
+func (ts *TrainingSet) Append(other *TrainingSet) (newSet *TrainingSet) {
+	newSet = NewTrainingSet()
+	newSet.Cases = append(newSet.Cases, ts.Cases...)
+	newSet.Cases = append(newSet.Cases, other.Cases...)
 	return
 }
 
@@ -433,7 +514,7 @@ func (n *Network) trainOne(trainingCase *TrainingCase, learningRate float64) (co
 	// Since Backprop is recursive, we only need to call it on the
 	// output layer.
 	outputLayer := n.Layers[len(n.Layers)-1]
-	outputLayer.Backprop(errors, learningRate)
+	outputLayer.backprop(errors, learningRate)
 
 	return
 }
@@ -441,31 +522,31 @@ func (n *Network) trainOne(trainingCase *TrainingCase, learningRate float64) (co
 // InputErrors returns the errors for the inputs of the given layer
 func (l *Layer) InputErrors(outputErrors []float64) (inputErrors []float64) {
 	Assert(len(outputErrors) == len(l.Nodes))
-	inputErrors = make([]float64, len(l.Inputs()))
+	inputErrors = make([]float64, len(l.getInputs()))
 	for i, node := range l.Nodes {
-		node.AddInputErrors(outputErrors[i], inputErrors)
+		node.addInputErrors(outputErrors[i], inputErrors)
 	}
 	return
 }
 
-// AddInputErrors adds the errors for the inputs of this node to the
+// addInputErrors adds the errors for the inputs of this node to the
 // given inputErrors slice, updating the slice in place.
-func (n *Node) AddInputErrors(outputError float64, inputErrors []float64) {
+func (n *Node) addInputErrors(outputError float64, inputErrors []float64) {
 	Assert(len(inputErrors) == len(n.Weights))
 	for i, weight := range n.Weights {
-		delta := outputError * n.activationD1(n.Output())
+		delta := outputError * n.activationD1(n.getOutput())
 		inputErrors[i] += weight * delta
 	}
 }
 
-// UpdateWeights updates the weights of this node
-func (n *Node) UpdateWeights(outputError float64, inputs []float64, learningRate float64) {
+// updateWeights updates the weights of this node
+func (n *Node) updateWeights(outputError float64, inputs []float64, learningRate float64) {
 	for j, input := range inputs {
 		// update the weight for the j-th input to this node
-		n.Weights[j] += learningRate * outputError * n.activationD1(n.Output()) * input
+		n.Weights[j] += learningRate * outputError * n.activationD1(n.getOutput()) * input
 	}
 	// update the bias
-	n.Bias += learningRate * outputError * n.activationD1(n.Output())
+	n.Bias += learningRate * outputError * n.activationD1(n.getOutput())
 	// Debug("Backprop: node %d errs %v weights %v, bias %v", i, outputErrs, node.Weights, node.Bias)
 
 	// mark cache dirty last so we only use the old output value
@@ -473,12 +554,12 @@ func (n *Node) UpdateWeights(outputError float64, inputs []float64, learningRate
 	n.cached = false
 }
 
-// Backprop performs backpropagation on a layer.  It takes a vector of
+// backprop performs backpropagation on a layer.  It takes a vector of
 // errors as input, updates the weights of the nodes in the layer, and
 // recurses to the upstream layer.
 // XXX move errs into the node struct, have node calculate its own
 // deltas and errors
-func (l *Layer) Backprop(outputErrs []float64, learningRate float64) {
+func (l *Layer) backprop(outputErrs []float64, learningRate float64) {
 
 	// Pf("Backprop: outputErrs: %v layer: %#v\n", outputErrs, l)
 
@@ -487,12 +568,12 @@ func (l *Layer) Backprop(outputErrs []float64, learningRate float64) {
 
 	// update the weights for the inputs to this layer
 	for i, node := range l.Nodes {
-		node.UpdateWeights(outputErrs[i], l.Inputs(), learningRate)
+		node.updateWeights(outputErrs[i], l.getInputs(), learningRate)
 	}
 
 	if l.upstream != nil {
 		// recurse to the upstream layer
-		l.upstream.Backprop(inputErrors, learningRate)
+		l.upstream.backprop(inputErrors, learningRate)
 	}
 }
 

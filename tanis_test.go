@@ -13,12 +13,13 @@ import (
 	"os"
 	"strconv"
 	"testing"
-	"time"
 
 	. "github.com/stevegt/goadapt"
 )
 
-func init() { rand.Seed(time.Now().UnixNano()) }
+func init() {
+	rand.Seed(1)
+}
 
 func TestSigmoid(t *testing.T) {
 	if y := sigmoid(0); y != 0.5 {
@@ -32,13 +33,16 @@ func TestSigmoid(t *testing.T) {
 // Dense returns a new dense fully-connected layer with sigmoid
 // activation function and the given number of inputs and nodes.
 func Dense(nodes, inputs int) (layer *Layer) {
-	layer = &Layer{}
-	for i := 0; i < nodes; i++ {
-		node := NewNode("sigmoid")
-		layer.Nodes = append(layer.Nodes, node)
-	}
-	layer.Init(inputs, nil)
-	layer.Randomize()
+	/*
+		layer = &Layer{}
+		for i := 0; i < nodes; i++ {
+			node := newNode("sigmoid")
+			layer.Nodes = append(layer.Nodes, node)
+		}
+		layer.init(inputs, nil)
+	*/
+	layer = newLayer(inputs, nodes, "sigmoid")
+	layer.randomize()
 	return
 }
 
@@ -48,7 +52,7 @@ func Dense(nodes, inputs int) (layer *Layer) {
 func (l *Layer) Forward(x []float64) (z []float64) {
 	n := &Network{InputCount: len(x), Layers: []*Layer{l}}
 	// Pprint(n)
-	n.Init()
+	n.init()
 	// Pprint(n)
 	// os.Exit(44)
 	z = n.Predict(x)
@@ -62,10 +66,10 @@ func New(layers ...*Layer) (*Network, error) {
 	Assert(len(layers) > 0, "no layers")
 	Assert(len(layers[0].inputs) > 0, "no inputs")
 	for i := 1; i < len(layers); i++ {
-		Assert(len(layers[i].Inputs()) == len(layers[i-1].Nodes), "layer mismatch")
+		Assert(len(layers[i].getInputs()) == len(layers[i-1].Nodes), "layer mismatch")
 	}
 	n := &Network{InputCount: len(layers[0].inputs), Layers: layers}
-	n.Init()
+	n.init()
 	// Pprint(n)
 	// Pf("l2: %#v\n", layers[1])
 	// os.Exit(55)
@@ -74,8 +78,8 @@ func New(layers ...*Layer) (*Network, error) {
 
 func TestForward(t *testing.T) {
 	l := Dense(1, 3)
-	l.SetWeights([][]float64{{1.74481176, -0.7612069, 0.3190391}})
-	l.SetBiases([]float64{-0.24937038})
+	l.setWeights([][]float64{{1.74481176, -0.7612069, 0.3190391}})
+	l.setBiases([]float64{-0.24937038})
 	x1 := []float64{1.62434536, -0.52817175, 0.86540763}
 	y1 := 0.96313579
 	z1 := l.Forward(x1)
@@ -97,12 +101,12 @@ func TestWeights(t *testing.T) {
 	n, _ := New(l1, l2)
 
 	// Initialise weights
-	l1.SetWeights([][]float64{{0.15, 0.2}, {0.25, 0.3}})
-	l1.SetBiases([]float64{0.35, 0.35})
+	l1.setWeights([][]float64{{0.15, 0.2}, {0.25, 0.3}})
+	l1.setBiases([]float64{0.35, 0.35})
 	// Pprint(l1)
 	// os.Exit(87)
-	l2.SetWeights([][]float64{{0.4, 0.45}, {0.5, 0.55}})
-	l2.SetBiases([]float64{0.6, 0.6})
+	l2.setWeights([][]float64{{0.4, 0.45}, {0.5, 0.55}})
+	l2.setBiases([]float64{0.6, 0.6})
 	// Pprint(l2)
 	// os.Exit(91)
 
@@ -173,8 +177,8 @@ func TestWeights(t *testing.T) {
 // Backward calls Backprop for layer l, passing vectors for inputs and
 // errors and a learning rate.
 func (l *Layer) Backward(inputs, errors []float64, rate float64) {
-	l.SetInputs(inputs)
-	l.Backprop(errors, rate)
+	l.setInputs(inputs)
+	l.backprop(errors, rate)
 }
 
 // Use single unit layer to predict OR function
@@ -205,7 +209,8 @@ func TestLayerOr(t *testing.T) {
 func TestNetworkXor(t *testing.T) {
 	x := [][]float64{{0, 0}, {0, 1}, {1, 0}, {1, 1}}
 	y := [][]float64{{0}, {1}, {1}, {0}}
-	n, _ := New(Dense(4, 2), Dense(1, 4))
+	// n, _ := New(Dense(4, 2), Dense(1, 4))
+	n := NewNetwork("foo", 2, 4, 1)
 	// create training set
 	set := NewTrainingSet()
 	for i, _ := range x {
@@ -214,6 +219,8 @@ func TestNetworkXor(t *testing.T) {
 	// Train at a learning rate of 1 for 10000 iterations or until cost is less than 2%
 	cost, err := n.Train(set, 1, 10000, 0.02)
 	Tassert(t, err == nil, "cost too high: %v", cost)
+
+	// Pl(n.Save())
 }
 
 // Use multiple hidden layers to predict sinc(x) function.
