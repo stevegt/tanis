@@ -33,15 +33,12 @@ func TestSigmoid(t *testing.T) {
 // Dense returns a new dense fully-connected layer with sigmoid
 // activation function and the given number of inputs and nodes.
 func Dense(nodes, inputs int) (layer *Layer) {
-	/*
-		layer = &Layer{}
-		for i := 0; i < nodes; i++ {
-			node := newNode("sigmoid")
-			layer.Nodes = append(layer.Nodes, node)
-		}
-		layer.init(inputs, nil)
-	*/
-	layer = newLayer(inputs, nodes, "sigmoid")
+	layer = &Layer{}
+	for i := 0; i < nodes; i++ {
+		node := newNode("sigmoid")
+		layer.Nodes = append(layer.Nodes, node)
+	}
+	layer.init(inputs, nil)
 	layer.randomize()
 	return
 }
@@ -374,6 +371,41 @@ func TestClone(t *testing.T) {
 		if z[0] != y[i][0] {
 			t.Error("failed to predict", x[i], z[0], y[i][0])
 		}
+	}
+}
+
+func TestActivations(t *testing.T) {
+	net := NewNetwork("foo", 3, 4, 5, 6)
+	net.SetActivation(-1, -1, "tanh")
+	net.SetActivation(1, -1, "sigmoid")
+	net.SetActivation(2, 1, "relu")
+
+	Tassert(t, net.Layers[1].Nodes[0].ActivationName == "sigmoid", net.Save())
+	Tassert(t, net.Layers[2].Nodes[0].ActivationName == "tanh", net.Save())
+	Tassert(t, net.Layers[2].Nodes[1].ActivationName == "relu", net.Save())
+	Tassert(t, net.Layers[2].Nodes[2].ActivationName == "tanh", net.Save())
+}
+
+// Test named inputs and outputs
+func TestNamed(t *testing.T) {
+	net := NewNetwork("foo", 3, 4, 5, 6)
+	net.SetActivation(2, -1, "linear")
+	net.SetInputNames("a", "b", "c")
+	net.SetOutputNames("x", "y", "z", "w", "v", "u")
+
+	// create some named inputs and targets
+	inputs := map[string]float64{"a": 1, "b": 2, "c": 3}
+	targets := map[string]float64{"x": 1, "y": 2, "z": 3, "w": 4, "v": 5, "u": 6}
+
+	// train the network
+	for i := 0; i < 1000; i++ {
+		net.LearnNamed(inputs, targets, 0.1)
+	}
+
+	// make some predictions
+	outputs := net.PredictNamed(inputs)
+	for k, v := range outputs {
+		Tassert(t, math.Abs(v-targets[k]) < 0.1, k, v, targets[k])
 	}
 
 }
