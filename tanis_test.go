@@ -408,4 +408,14 @@ func TestNamed(t *testing.T) {
 		Tassert(t, math.Abs(v-targets[k]) < 0.1, k, v, targets[k])
 	}
 
+	// try it again, this time without explicitly setting the input and output names
+	net = NewNetwork("foo", 3, 4, 5, 6)
+	net.SetActivation(2, -1, "linear")
+	for i := 0; i < 1000; i++ {
+		net.LearnNamed(inputs, targets, 0.1)
+	}
+	outputs = net.PredictNamed(inputs)
+	for k, v := range outputs {
+		Tassert(t, math.Abs(v-targets[k]) < 0.1, k, v, targets[k])
+	}
 }

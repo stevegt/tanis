@@ -61,6 +61,50 @@ func linearD1(x float64) float64 {
 	return 1
 }
 
+// square activation function
+func square(x float64) float64 {
+	return x * x
+}
+
+// square derivative
+func squareD1(x float64) float64 {
+	return 2 * x
+}
+
+// square root activation function
+func sqrt(x float64) float64 {
+	// handle negative numbers
+	if x < 0 {
+		return -math.Sqrt(-x)
+	}
+	return math.Sqrt(x)
+}
+
+// square root derivative
+func sqrtD1(x float64) float64 {
+	// handle negative numbers
+	if x < 0 {
+		return -1 / (2 * math.Sqrt(-x))
+	}
+	return 1 / (2 * math.Sqrt(x))
+}
+
+// abs activation function
+func abs(x float64) float64 {
+	return math.Abs(x)
+}
+
+// abs derivative
+func absD1(x float64) float64 {
+	if x < 0 {
+		return -1
+	}
+	if x > 0 {
+		return 1
+	}
+	return 0
+}
+
 /*
 func main() {
 	// Create a network with 2 inputs, 2 hidden nodes, and 2 outputs
@@ -139,7 +183,7 @@ type Network struct {
 	InputNames  []string
 	OutputNames []string
 	Layers      []*Layer
-	cost        float64 // most recent training cost
+	Cost        float64 // most recent training cost
 	lock        sync.Mutex
 }
 
@@ -165,14 +209,18 @@ func (n *Network) init() {
 
 // Save serializes the network configuration, weights, and biases to a
 // JSON string.
-func (n *Network) Save() string {
+func (n *Network) Save() (out string) {
 	n.lock.Lock()
 	defer n.lock.Unlock()
 
 	var buf []byte
 	buf, err := json.MarshalIndent(n, "", "  ")
-	Ck(err)
-	return string(buf)
+	if err != nil {
+		n.ShowNaNs()
+		Assert(false, "error marshaling network: %v", err)
+	}
+	out = string(buf)
+	return
 }
 
 // Load deserializes a network configuration, weights, and biases from
@@ -196,6 +244,7 @@ func NewNetwork(name string, inputCount int, layerSizes ...int) (net *Network) {
 		Name:       name,
 		InputCount: inputCount,
 		Layers:     make([]*Layer, len(layerSizes)),
+		Cost:       math.MaxFloat64,
 	}
 	layerInputCount := inputCount
 	for layerNum := 0; layerNum < len(layerSizes); layerNum++ {
@@ -254,7 +303,7 @@ func (n *Network) GetName() string {
 
 // GetCost returns the cost of the most recent call to Train() or Learn().
 func (n *Network) GetCost() float64 {
-	return n.cost
+	return n.Cost
 }
 
 // SetInputNames sets the names of the inputs. The names are used in
@@ -262,6 +311,8 @@ func (n *Network) GetCost() float64 {
 func (n *Network) SetInputNames(names ...string) {
 	n.lock.Lock()
 	defer n.lock.Unlock()
+	Assert(len(names) == n.InputCount)
+	Assert(n.InputNames == nil)
 	n.InputNames = names
 }
 
@@ -270,6 +321,8 @@ func (n *Network) SetInputNames(names ...string) {
 func (n *Network) SetOutputNames(names ...string) {
 	n.lock.Lock()
 	defer n.lock.Unlock()
+	Assert(len(names) == len(n.Layers[len(n.Layers)-1].Nodes))
+	Assert(n.OutputNames == nil)
 	n.OutputNames = names
 }
 
@@ -324,19 +377,46 @@ func (n *Network) PredictNamed(inputMap map[string]float64) (outputMap map[strin
 
 // LearnNamed trains the network for one iteration with the given
 // named input and target maps.  It ignores named inputs and targets
-// which are not in the network, and assumes zero for named inputs and
-// targets which are in the network but not in the given maps.
+// which are not in the network, and assumes zero values for named
+// inputs and targets which are in the network but not in the given
+// maps.
 func (n *Network) LearnNamed(inputMap, targetMap map[string]float64, rate float64) (cost float64) {
 	n.lock.Lock()
 	defer n.lock.Unlock()
+
+	// special case: if we're calling this for the first time and the
+	// input names and output names have not been set, then set them
+	// now.
+	if n.InputNames == nil && n.OutputNames == nil {
+		Assert(len(inputMap) <= n.InputCount)
+		Assert(len(targetMap) <= len(n.Layers[len(n.Layers)-1].Nodes))
+		n.InputNames = make([]string, len(inputMap))
+		n.OutputNames = make([]string, len(targetMap))
+		i := 0
+		for name, _ := range inputMap {
+			n.InputNames[i] = name
+			i++
+		}
+		i = 0
+		for name, _ := range targetMap {
+			n.OutputNames[i] = name
+			i++
+		}
+	}
+	Assert(len(n.InputNames) > 0)
+	Assert(len(n.OutputNames) > 0)
+
 	inputSlice := make([]float64, len(n.InputNames))
 	targetSlice := make([]float64, len(n.OutputNames))
+	foundInput := false
+	foundTarget := false
 	for i, name := range n.InputNames {
 		input, ok := inputMap[name]
 		if !ok {
 			continue
 		}
 		inputSlice[i] = input
+		foundInput = true
 	}
 	for i, name := range n.OutputNames {
 		target, ok := targetMap[name]
@@ -344,7 +424,10 @@ func (n *Network) LearnNamed(inputMap, targetMap map[string]float64, rate float6
 			continue
 		}
 		targetSlice[i] = target
+		foundTarget = true
 	}
+	Assert(foundInput, "%v %v", n.InputNames, inputMap)
+	Assert(foundTarget, "%v %v", n.OutputNames, targetMap)
 	cost = n.learn(inputSlice, targetSlice, rate)
 	return
 }
@@ -388,7 +471,7 @@ func (n *Network) Add(other *Network) {
 			node.Bias += otherNode.Bias
 		}
 	}
-	n.cost += other.cost
+	n.Cost += other.Cost
 }
 
 // Divide divides the weights and biases of this network by the given
@@ -405,7 +488,7 @@ func (n *Network) Divide(scalar float64) {
 			node.Bias /= scalar
 		}
 	}
-	n.cost /= scalar
+	n.Cost /= scalar
 }
 
 // Clone returns a deep copy of the network, giving it a new name.
@@ -428,6 +511,7 @@ func (n *Network) Predict(inputs []float64) (outputs []float64) {
 }
 
 func (n *Network) predict(inputs []float64) (outputs []float64) {
+	Assert(len(inputs) == n.InputCount)
 	// clear caches
 	for _, layer := range n.Layers {
 		for _, node := range layer.Nodes {
@@ -451,6 +535,24 @@ func (n *Network) Randomize() {
 	defer n.lock.Unlock()
 	for _, layer := range n.Layers {
 		layer.randomize()
+	}
+}
+
+// ShowNaNs shows the weights and biases of all nodes that are NaN.
+func (n *Network) ShowNaNs() {
+	n.lock.Lock()
+	defer n.lock.Unlock()
+	for i, layer := range n.Layers {
+		for j, node := range layer.Nodes {
+			for k := 0; k < len(node.Weights); k++ {
+				if math.IsNaN(node.Weights[k]) {
+					Pf("layer %v node %v weight %v is NaN\n", i, j, k)
+				}
+			}
+			if math.IsNaN(node.Bias) {
+				Pf("layer %v node %v bias is NaN\n", i, j)
+			}
+		}
 	}
 }
 
@@ -546,6 +648,15 @@ func activationFuncs(name string) (activation, activationD1 func(float64) float6
 	case "linear":
 		activation = linear
 		activationD1 = linearD1
+	case "square":
+		activation = square
+		activationD1 = squareD1
+	case "sqrt":
+		activation = sqrt
+		activationD1 = sqrtD1
+	case "abs":
+		activation = abs
+		activationD1 = absD1
 	default:
 		Assert(false, "unknown activation function: %s", name)
 	}
@@ -705,16 +816,16 @@ func (n *Network) Train(trainingSet *TrainingSet, learningRate float64, iteratio
 	defer n.lock.Unlock()
 
 	for i := 0; i < iterations; i++ {
-		n.cost = 0.0
+		n.Cost = 0.0
 		for _, trainingCase := range trainingSet.Cases {
-			n.cost += n.trainOne(trainingCase, learningRate)
+			n.Cost += n.trainOne(trainingCase, learningRate)
 		}
-		n.cost /= float64(len(trainingSet.Cases))
-		if n.cost < maxCost {
-			return n.cost, nil
+		n.Cost /= float64(len(trainingSet.Cases))
+		if n.Cost < maxCost {
+			return n.Cost, nil
 		}
 	}
-	return n.cost, fmt.Errorf("max iterations reached")
+	return n.Cost, fmt.Errorf("max iterations reached")
 }
 
 func (n *Network) trainOne(trainingCase *TrainingCase, learningRate float64) (cost float64) {
@@ -733,9 +844,13 @@ func (n *Network) Learn(inputs []float64, targets []float64, learningRate float6
 }
 
 func (n *Network) learn(inputs []float64, targets []float64, learningRate float64) (cost float64) {
+	Assert(len(inputs) == n.InputCount, "input count mismatch")
+	outputLayer := n.Layers[len(n.Layers)-1]
+	Assert(len(targets) == len(outputLayer.Nodes), "output count mismatch")
+
 	// provide inputs, get outputs
 	outputs := n.predict(inputs)
-	n.cost = 0.0
+	n.Cost = 0.0
 
 	// initialize the error vector with the output errors
 	errors := make([]float64, len(outputs))
@@ -749,17 +864,17 @@ func (n *Network) learn(inputs []float64, targets []float64, learningRate float6
 		// XXX DcostDoutput
 		errors[i] = target - outputs[i]
 		// accumulate total cost
-		n.cost += 0.5 * math.Pow(target-outputs[i], 2)
+		n.Cost += 0.5 * math.Pow(target-outputs[i], 2)
 	}
+	// Pf("inputs: %v, outputs: %v, targets: %v, errors: %v, cost: %v\n", inputs, outputs, targets, errors, n.cost)
 
 	// Backpropagate the errors through the network and update the
 	// weights, starting from the output layer and working backwards.
 	// Since Backprop is recursive, we only need to call it on the
 	// output layer.
-	outputLayer := n.Layers[len(n.Layers)-1]
 	outputLayer.backprop(errors, learningRate)
 
-	return n.cost
+	return n.Cost
 }
 
 // InputErrors returns the errors for the inputs of the given layer
