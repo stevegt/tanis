@@ -558,7 +558,7 @@ func (n *Network) ShowNaNs() {
 
 // Layer represents a layer of nodes.
 type Layer struct {
-	Nodes    []*Node
+	Nodes    []*SimpleNode
 	inputs   []float64
 	upstream *Layer
 }
@@ -610,8 +610,11 @@ func (l *Layer) setInputs(inputs []float64) {
 	}
 }
 
-// Node represents a node in a neural network.
-type Node struct {
+type Node interface {
+}
+
+// SimpleNode represents a node in a neural network.
+type SimpleNode struct {
 	Weights        []float64 // weights for the inputs of this node
 	Bias           float64   // bias for this node
 	ActivationName string    // name of the activation function
@@ -625,10 +628,21 @@ type Node struct {
 	lock   sync.Mutex
 }
 
+// Activation runs the activation function of this node.
+func (n *SimpleNode) Activation(x float64) float64 {
+	return n.activation(x)
+}
+
+// ActivationD1 runs the derivative of the activation function of this
+// node.
+func (n *SimpleNode) ActivationD1(x float64) float64 {
+	return n.activationD1(x)
+}
+
 // newNode creates a new node.  The arguments are the activation
 // function and its derivative.
-func newNode(activationName string) (n *Node) {
-	n = &Node{ActivationName: activationName}
+func newNode(activationName string) (n *SimpleNode) {
+	n = &SimpleNode{ActivationName: activationName}
 	return
 }
 
@@ -664,14 +678,14 @@ func activationFuncs(name string) (activation, activationD1 func(float64) float6
 }
 
 // setActivation sets the activation function and its derivative.
-func (n *Node) setActivation(name string) {
+func (n *SimpleNode) setActivation(name string) {
 	n.ActivationName = name
 	n.activation, n.activationD1 = activationFuncs(name)
 }
 
 // init initializes a node by connecting it to the upstream layer and
 // creating a weight slot for each upstream node.
-func (n *Node) init(layer *Layer) {
+func (n *SimpleNode) init(layer *Layer) {
 	n.setActivation(n.ActivationName)
 	n.layer = layer
 	// allow for test cases to pre-set weights by only creating the
@@ -682,7 +696,7 @@ func (n *Node) init(layer *Layer) {
 }
 
 // setWeights sets the weights of this node to the given values.
-func (n *Node) setWeights(weights []float64) {
+func (n *SimpleNode) setWeights(weights []float64) {
 	// Assert(len(n.Weights) == len(weights), Spf("n.Weights: %v, weights: %v", n.Weights, weights))
 	Assert(len(n.Weights) == len(weights))
 	copy(n.Weights, weights)
@@ -697,15 +711,15 @@ func (l *Layer) getInputs() (inputs []float64) {
 	} else {
 		Assert(len(l.inputs) == 0, Spf("layer: %#v", l))
 		for _, upstreamNode := range l.upstream.Nodes {
-			inputs = append(inputs, upstreamNode.getOutput())
+			inputs = append(inputs, upstreamNode.Output())
 		}
 	}
 	return
 }
 
-// getOutput executes the forward function of a node and returns its
+// Output executes the forward function of a node and returns its
 // output value.
-func (n *Node) getOutput() (output float64) {
+func (n *SimpleNode) Output() (output float64) {
 	// lock the node so that only one goroutine can access it at a time
 	n.lock.Lock()
 	defer n.lock.Unlock()
@@ -714,18 +728,28 @@ func (n *Node) getOutput() (output float64) {
 		weightedSum := 0.0
 		// add weighted inputs
 		for i, input := range inputs {
+			Assert(!math.IsNaN(input), "input: %v", input)
 			weightedSum += input * n.Weights[i]
+			// Assert(!math.IsNaN(weightedSum), "weightedSum: %v, input: %v, weight: %v", weightedSum, input, n.Weights[i])
 		}
 		// add bias
 		weightedSum += n.Bias
+		// Assert(!math.IsNaN(weightedSum), "weightedSum: %v", weightedSum)
 		// apply activation function
-		n.output = n.activation(weightedSum)
+		n.output = n.Activation(weightedSum)
+		// handle overflow
+		if math.IsNaN(n.output) || math.IsInf(n.output, 0) {
+			Pl("overflow, randomizing node: weightedSum: %v, inputs: %v, weights: %v, bias: %v", weightedSum, inputs, n.Weights, n.Bias)
+			n.randomize()
+			n.output = rand.Float64()*2 - 1
+		}
+		Assert(!math.IsNaN(n.output), Spf("output: %v, weightedSum: %v, activation: %#v", n.output, weightedSum, n.Activation))
 		n.cached = true
 	}
 	return n.output
 }
 
-func (n *Node) randomize() {
+func (n *SimpleNode) randomize() {
 	for i := range n.Weights {
 		n.Weights[i] = rand.Float64()*2 - 1
 	}
