@@ -183,7 +183,7 @@ type Network struct {
 	InputNames  []string
 	OutputNames []string
 	Layers      []*Layer
-	Cost        float64 // most recent training cost
+	cost        float64 // most recent training cost
 	lock        sync.Mutex
 }
 
@@ -244,7 +244,6 @@ func NewNetwork(name string, inputCount int, layerSizes ...int) (net *Network) {
 		Name:       name,
 		InputCount: inputCount,
 		Layers:     make([]*Layer, len(layerSizes)),
-		Cost:       math.MaxFloat64,
 	}
 	layerInputCount := inputCount
 	for layerNum := 0; layerNum < len(layerSizes); layerNum++ {
@@ -253,7 +252,7 @@ func NewNetwork(name string, inputCount int, layerSizes ...int) (net *Network) {
 		}
 		nodeCount := layerSizes[layerNum]
 		layer := &Layer{
-			Nodes: make([]*Node, nodeCount),
+			Nodes: make([]*SimpleNode, nodeCount),
 		}
 		for n := 0; n < nodeCount; n++ {
 			layer.Nodes[n] = newNode("sigmoid")
@@ -303,7 +302,7 @@ func (n *Network) GetName() string {
 
 // GetCost returns the cost of the most recent call to Train() or Learn().
 func (n *Network) GetCost() float64 {
-	return n.Cost
+	return n.cost
 }
 
 // SetInputNames sets the names of the inputs. The names are used in
@@ -474,7 +473,7 @@ func (n *Network) Add(other *Network) {
 			node.Bias += otherNode.Bias
 		}
 	}
-	n.Cost += other.Cost
+	n.cost += other.cost
 }
 
 // Divide divides the weights and biases of this network by the given
@@ -491,7 +490,7 @@ func (n *Network) Divide(scalar float64) {
 			node.Bias /= scalar
 		}
 	}
-	n.Cost /= scalar
+	n.cost /= scalar
 }
 
 // Clone returns a deep copy of the network, giving it a new name.
@@ -527,7 +526,7 @@ func (n *Network) predict(inputs []float64) (outputs []float64) {
 	// execute forward function
 	outputLayer := n.Layers[len(n.Layers)-1]
 	for _, outputNode := range outputLayer.Nodes {
-		outputs = append(outputs, outputNode.getOutput())
+		outputs = append(outputs, outputNode.Output())
 	}
 	return
 }
@@ -841,16 +840,16 @@ func (n *Network) Train(trainingSet *TrainingSet, learningRate float64, iteratio
 	defer n.lock.Unlock()
 
 	for i := 0; i < iterations; i++ {
-		n.Cost = 0.0
+		n.cost = 0.0
 		for _, trainingCase := range trainingSet.Cases {
-			n.Cost += n.trainOne(trainingCase, learningRate)
+			n.cost += n.trainOne(trainingCase, learningRate)
 		}
-		n.Cost /= float64(len(trainingSet.Cases))
-		if n.Cost < maxCost {
-			return n.Cost, nil
+		n.cost /= float64(len(trainingSet.Cases))
+		if n.cost < maxCost {
+			return n.cost, nil
 		}
 	}
-	return n.Cost, fmt.Errorf("max iterations reached")
+	return n.cost, fmt.Errorf("max iterations reached")
 }
 
 func (n *Network) trainOne(trainingCase *TrainingCase, learningRate float64) (cost float64) {
@@ -875,7 +874,7 @@ func (n *Network) learn(inputs []float64, targets []float64, learningRate float6
 
 	// provide inputs, get outputs
 	outputs := n.predict(inputs)
-	n.Cost = 0.0
+	n.cost = 0.0
 
 	// initialize the error vector with the output errors
 	errors := make([]float64, len(outputs))
