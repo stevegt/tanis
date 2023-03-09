@@ -419,3 +419,31 @@ func TestNamed(t *testing.T) {
 		Tassert(t, math.Abs(v-targets[k]) < 0.1, k, v, targets[k])
 	}
 }
+
+/*
+// Test nested networks
+func TestNested(t *testing.T) {
+	// create a foo network with a bar network inside it
+	foo := NewNetwork("foo", 3, 2, 1)
+	foo.SetInputNames("a", "b", "c")
+	foo.SetOutputNames("y")
+	bar := NewNetwork("bar", 1, 2, 1)
+	// replace the first node of the first layer of foo with bar
+	foo.ReplaceNode(0, 0, bar)
+
+	// create some named inputs and targets
+	inputs := map[string]float64{"a": 1, "b": 2, "c": 3}
+	targets := map[string]float64{"y": 2}
+
+	// train the network
+	for i := 0; i < 1000; i++ {
+		foo.LearnNamed(inputs, targets, 0.1)
+	}
+
+	// make some predictions
+	outputs := foo.PredictNamed(inputs)
+	for k, v := range outputs {
+		Tassert(t, math.Abs(v-targets[k]) < 0.1, k, v, targets[k])
+	}
+}
+*/
