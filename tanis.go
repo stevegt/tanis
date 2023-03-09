@@ -891,7 +891,7 @@ func (n *Network) learn(inputs []float64, targets []float64, learningRate float6
 		errors[i] = target - outputs[i]
 		Assert(!math.IsNaN(errors[i]), Spf("error is NaN, target: %v, output: %v", target, outputs[i]))
 		// accumulate total cost
-		n.Cost += 0.5 * math.Pow(target-outputs[i], 2)
+		n.cost += 0.5 * math.Pow(target-outputs[i], 2)
 	}
 	// Pf("inputs: %v, outputs: %v, targets: %v, errors: %v, cost: %v\n", inputs, outputs, targets, errors, n.cost)
 
@@ -901,42 +901,64 @@ func (n *Network) learn(inputs []float64, targets []float64, learningRate float6
 	// output layer.
 	outputLayer.backprop(errors, learningRate)
 
-	return n.Cost
+	return n.cost
 }
 
 // InputErrors returns the errors for the inputs of the given layer
 func (l *Layer) InputErrors(outputErrors []float64) (inputErrors []float64) {
 	Assert(len(outputErrors) == len(l.Nodes))
 	inputErrors = make([]float64, len(l.getInputs()))
-	for i, node := range l.Nodes {
-		node.addInputErrors(outputErrors[i], inputErrors)
+	for i, n := range l.Nodes {
+		n.AddInputErrors(outputErrors[i], inputErrors)
 	}
 	return
 }
 
-// addInputErrors adds the errors for the inputs of this node to the
-// given inputErrors slice, updating the slice in place.
-func (n *Node) addInputErrors(outputError float64, inputErrors []float64) {
-	Assert(len(inputErrors) == len(n.Weights), "%v %v", len(inputErrors), len(n.Weights))
+// AddInputErrors adds the errors for the inputs of the given node to the
+// given error vector.
+func (n *SimpleNode) AddInputErrors(outputError float64, inputErrors []float64) {
+	Assert(len(inputErrors) == len(n.Weights))
 	for i, weight := range n.Weights {
-		delta := outputError * n.activationD1(n.getOutput())
+		delta := outputError * n.ActivationD1(n.Output())
 		inputErrors[i] += weight * delta
 	}
 }
 
 // updateWeights updates the weights of this node
-func (n *Node) updateWeights(outputError float64, inputs []float64, learningRate float64) {
+func (n *SimpleNode) updateWeights(outputError float64, inputs []float64, learningRate float64) {
+	Assert(!math.IsNaN(outputError), "outputError is NaN")
 	for j, input := range inputs {
 		// update the weight for the j-th input to this node
-		n.Weights[j] += learningRate * outputError * n.activationD1(n.getOutput()) * input
+		Assert(!math.IsNaN(input), "input is NaN")
+		n.Weights[j] += learningRate * outputError * n.ActivationD1(n.Output()) * input
+		// Assert(!math.IsNaN(n.Weights[j]), Spf("weight is NaN, outputError: %v, input: %v, activationD1: %v, weight: %v", outputError, input, n.ActivationName))
+		// if overflow then randomize the weight
+		if math.IsNaN(n.Weights[j]) || math.IsInf(n.Weights[j], 0) {
+			Pf("overflow detected, randomizing weight: input: %v, outputError: %v, activation: %v, weight: %v\n", input, outputError, n.ActivationName, n.Weights[j])
+			n.Weights[j] = rand.Float64()*2 - 1
+		}
 	}
 	// update the bias
-	n.Bias += learningRate * outputError * n.activationD1(n.getOutput())
+	n.Bias += learningRate * outputError * n.ActivationD1(n.Output())
+	// randomize the bias if overflow
+	if math.IsNaN(n.Bias) || math.IsInf(n.Bias, 0) {
+		Pf("overflow detected, randomizing bias: outputError: %v, activation: %v, bias: %v\n", outputError, n.ActivationName, n.Bias)
+		n.Bias = rand.Float64()*2 - 1
+	}
+	// Assert(!math.IsNaN(n.Bias), Spf("bias is NaN, outputError: %v, activationD1: %v", outputError, n.ActivationName))
 	// Debug("Backprop: node %d errs %v weights %v, bias %v", i, outputErrs, node.Weights, node.Bias)
 
 	// mark cache dirty last so we only use the old output value
 	// in the above calculations
 	n.cached = false
+}
+
+// updateWeights updates the weights of this layer
+func (l *Layer) updateWeights(outputErrors []float64, learningRate float64) {
+	Assert(len(outputErrors) == len(l.Nodes))
+	for i, node := range l.Nodes {
+		node.updateWeights(outputErrors[i], l.getInputs(), learningRate)
+	}
 }
 
 // backprop performs backpropagation on a layer.  It takes a vector of
@@ -946,15 +968,25 @@ func (n *Node) updateWeights(outputError float64, inputs []float64, learningRate
 // deltas and errors
 func (l *Layer) backprop(outputErrs []float64, learningRate float64) {
 
+	// handle overflows in the output errors
+	newOutputErrs := make([]float64, len(outputErrs))
+	for i, outputErr := range outputErrs {
+		if math.IsNaN(outputErr) || math.IsInf(outputErr, 0) {
+			Pf("overflow detected, randomizing output error: %v\n", outputErr)
+			newOutputErrs[i] = rand.Float64()*2 - 1
+		} else {
+			newOutputErrs[i] = outputErr
+		}
+	}
+	outputErrs = newOutputErrs
+
 	// Pf("Backprop: outputErrs: %v layer: %#v\n", outputErrs, l)
 
-	// update the errors for the inputs to this layer
+	// get the errors for the inputs to this layer
 	inputErrors := l.InputErrors(outputErrs)
 
-	// update the weights for the inputs to this layer
-	for i, node := range l.Nodes {
-		node.updateWeights(outputErrs[i], l.getInputs(), learningRate)
-	}
+	// update the input weights in this layer
+	l.updateWeights(outputErrs, learningRate)
 
 	if l.upstream != nil {
 		// recurse to the upstream layer
