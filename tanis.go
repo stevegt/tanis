@@ -216,7 +216,7 @@ func (n *Network) Save() (out string) {
 	var buf []byte
 	buf, err := json.MarshalIndent(n, "", "  ")
 	if err != nil {
-		n.ShowNaNs()
+		n.showNaNs()
 		Assert(false, "error marshaling network: %v", err)
 	}
 	out = string(buf)
@@ -365,6 +365,7 @@ func (n *Network) PredictNamed(inputMap map[string]float64) (outputMap map[strin
 		if !ok {
 			continue
 		}
+		Assert(!math.IsNaN(input), "input %s is NaN", name)
 		inputSlice[i] = input
 	}
 	outputSlice := n.predict(inputSlice)
@@ -415,6 +416,7 @@ func (n *Network) LearnNamed(inputMap, targetMap map[string]float64, rate float6
 		if !ok {
 			continue
 		}
+		Assert(!math.IsNaN(input), "input %s is NaN", name)
 		inputSlice[i] = input
 		foundInput = true
 	}
@@ -423,6 +425,7 @@ func (n *Network) LearnNamed(inputMap, targetMap map[string]float64, rate float6
 		if !ok {
 			continue
 		}
+		Assert(!math.IsNaN(target), "target %s is NaN", name)
 		targetSlice[i] = target
 		foundTarget = true
 	}
@@ -539,9 +542,7 @@ func (n *Network) Randomize() {
 }
 
 // ShowNaNs shows the weights and biases of all nodes that are NaN.
-func (n *Network) ShowNaNs() {
-	n.lock.Lock()
-	defer n.lock.Unlock()
+func (n *Network) showNaNs() {
 	for i, layer := range n.Layers {
 		for j, node := range layer.Nodes {
 			for k := 0; k < len(node.Weights); k++ {
@@ -879,6 +880,7 @@ func (n *Network) learn(inputs []float64, targets []float64, learningRate float6
 	// initialize the error vector with the output errors
 	errors := make([]float64, len(outputs))
 	for i, target := range targets {
+		Assert(!math.IsNaN(target), "target is NaN")
 		// populate the vector of errors for the output layer -- this is the
 		// derivative of the cost function, which is just the difference
 		// between the expected and actual output values.
@@ -887,6 +889,7 @@ func (n *Network) learn(inputs []float64, targets []float64, learningRate float6
 		// dcost/dx = y - x
 		// XXX DcostDoutput
 		errors[i] = target - outputs[i]
+		Assert(!math.IsNaN(errors[i]), Spf("error is NaN, target: %v, output: %v", target, outputs[i]))
 		// accumulate total cost
 		n.Cost += 0.5 * math.Pow(target-outputs[i], 2)
 	}
