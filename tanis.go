@@ -226,7 +226,7 @@ func (n *Network) Save() (out string) {
 // Load deserializes a network configuration, weights, and biases from
 // a JSON string.
 func Load(txt string) (n *Network, err error) {
-	Return(&err)
+	defer Return(&err)
 	n = &Network{}
 	err = json.Unmarshal([]byte(txt), &n)
 	Ck(err)
@@ -408,6 +408,11 @@ func (n *Network) LearnNamed(inputMap, targetMap map[string]float64, rate float6
 
 	inputSlice := make([]float64, len(n.InputNames))
 	targetSlice := make([]float64, len(n.OutputNames))
+	// initialize with NaNs so that we can detect missing targets
+	for i := range targetSlice {
+		targetSlice[i] = math.NaN()
+	}
+
 	foundInput := false
 	foundTarget := false
 	for i, name := range n.InputNames {
@@ -739,7 +744,7 @@ func (n *SimpleNode) Output() (output float64) {
 		n.output = n.Activation(weightedSum)
 		// handle overflow
 		if math.IsNaN(n.output) || math.IsInf(n.output, 0) {
-			Pl("overflow, randomizing node: weightedSum: %v, inputs: %v, weights: %v, bias: %v", weightedSum, inputs, n.Weights, n.Bias)
+			Pf("overflow, randomizing node: weightedSum: %v, inputs: %v, weights: %v, bias: %v", weightedSum, inputs, n.Weights, n.Bias)
 			n.randomize()
 			n.output = rand.Float64()*2 - 1
 		}
@@ -879,7 +884,13 @@ func (n *Network) learn(inputs []float64, targets []float64, learningRate float6
 	// initialize the error vector with the output errors
 	errors := make([]float64, len(outputs))
 	for i, target := range targets {
-		Assert(!math.IsNaN(target), "target is NaN")
+		// Assert(!math.IsNaN(target), "target is NaN")
+		// skip this output if the target is NaN -- this is useful
+		// when using LearnNamed, which may not have a target for
+		// every output.
+		if math.IsNaN(target) {
+			continue
+		}
 		// populate the vector of errors for the output layer -- this is the
 		// derivative of the cost function, which is just the difference
 		// between the expected and actual output values.
