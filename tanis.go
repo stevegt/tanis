@@ -864,7 +864,7 @@ func (n *Network) trainOne(trainingCase *TrainingCase, learningRate float64) (co
 }
 
 // Learn runs one backpropagation iteration through the network. It
-// takes inputs and targets returns the total error cost of
+// takes inputs and targets and returns the total cost of
 // the output nodes.
 func (n *Network) Learn(inputs []float64, targets []float64, learningRate float64) (cost float64) {
 	n.lock.Lock()
@@ -881,8 +881,8 @@ func (n *Network) learn(inputs []float64, targets []float64, learningRate float6
 	outputs := n.predict(inputs)
 	n.cost = 0.0
 
-	// initialize the error vector with the output errors
-	errors := make([]float64, len(outputs))
+	// initialize the gradient vector with the output gradients
+	gradients := make([]float64, len(outputs))
 	for i, target := range targets {
 		// Assert(!math.IsNaN(target), "target is NaN")
 		// skip this output if the target is NaN -- this is useful
@@ -891,71 +891,68 @@ func (n *Network) learn(inputs []float64, targets []float64, learningRate float6
 		if math.IsNaN(target) {
 			continue
 		}
-		// populate the vector of errors for the output layer -- this is the
+		// populate the vector of gradients for the output layer -- this is the
 		// derivative of the cost function, which is just the difference
 		// between the expected and actual output values.
 		//
 		// cost = 0.5 * (y - x)^2
 		// dcost/dx = y - x
 		// XXX DcostDoutput
-		errors[i] = target - outputs[i]
-		Assert(!math.IsNaN(errors[i]), Spf("error is NaN, target: %v, output: %v", target, outputs[i]))
+		gradients[i] = target - outputs[i]
+		Assert(!math.IsNaN(gradients[i]), Spf("gradient is NaN, target: %v, output: %v", target, outputs[i]))
 		// accumulate total cost
-		n.cost += 0.5 * math.Pow(target-outputs[i], 2)
+		n.cost += 0.5 * math.Pow(gradients[i], 2)
 	}
-	// Pf("inputs: %v, outputs: %v, targets: %v, errors: %v, cost: %v\n", inputs, outputs, targets, errors, n.cost)
 
-	// Backpropagate the errors through the network and update the
+	// Backpropagate the gradients through the network and update the
 	// weights, starting from the output layer and working backwards.
 	// Since Backprop is recursive, we only need to call it on the
 	// output layer.
-	outputLayer.backprop(errors, learningRate)
+	outputLayer.backprop(gradients, learningRate)
 
 	return n.cost
 }
 
-// InputErrors returns the errors for the inputs of the given layer
-func (l *Layer) InputErrors(outputErrors []float64) (inputErrors []float64) {
-	Assert(len(outputErrors) == len(l.Nodes))
-	inputErrors = make([]float64, len(l.getInputs()))
+// InputGradients returns the gradients for the inputs of the given layer.
+func (l *Layer) InputGradients(outputGradients []float64) (inputGradients []float64) {
+	Assert(len(outputGradients) == len(l.Nodes))
+	inputGradients = make([]float64, len(l.getInputs()))
 	for i, n := range l.Nodes {
-		n.AddInputErrors(outputErrors[i], inputErrors)
+		n.AddInputGradients(outputGradients[i], inputGradients)
 	}
 	return
 }
 
-// AddInputErrors adds the errors for the inputs of the given node to the
-// given error vector.
-func (n *SimpleNode) AddInputErrors(outputError float64, inputErrors []float64) {
-	Assert(len(inputErrors) == len(n.Weights))
+// AddInputGradients adds the gradients for the inputs of this node to the
+// given gradient vector.
+func (n *SimpleNode) AddInputGradients(outputGradient float64, inputGradients []float64) {
+	Assert(len(inputGradients) == len(n.Weights))
 	for i, weight := range n.Weights {
-		delta := outputError * n.ActivationD1(n.Output())
-		inputErrors[i] += weight * delta
+		delta := outputGradient * n.ActivationD1(n.Output())
+		inputGradients[i] += weight * delta
 	}
 }
 
 // updateWeights updates the weights of this node
-func (n *SimpleNode) updateWeights(outputError float64, inputs []float64, learningRate float64) {
-	Assert(!math.IsNaN(outputError), "outputError is NaN")
+func (n *SimpleNode) updateWeights(outputGradient float64, inputs []float64, learningRate float64) {
+	Assert(!math.IsNaN(outputGradient), "outputGradient is NaN")
 	for j, input := range inputs {
 		// update the weight for the j-th input to this node
 		Assert(!math.IsNaN(input), "input is NaN")
-		n.Weights[j] += learningRate * outputError * n.ActivationD1(n.Output()) * input
-		// Assert(!math.IsNaN(n.Weights[j]), Spf("weight is NaN, outputError: %v, input: %v, activationD1: %v, weight: %v", outputError, input, n.ActivationName))
+		n.Weights[j] += learningRate * outputGradient * n.ActivationD1(n.Output()) * input
 		// if overflow then randomize the weight
 		if math.IsNaN(n.Weights[j]) || math.IsInf(n.Weights[j], 0) {
-			Pf("overflow detected, randomizing weight: input: %v, outputError: %v, activation: %v, weight: %v\n", input, outputError, n.ActivationName, n.Weights[j])
+			Pf("overflow detected, randomizing weight: input: %v, outputGradient: %v, activation: %v, weight: %v\n", input, outputGradient, n.ActivationName, n.Weights[j])
 			n.Weights[j] = rand.Float64()*2 - 1
 		}
 	}
 	// update the bias
-	n.Bias += learningRate * outputError * n.ActivationD1(n.Output())
+	n.Bias += learningRate * outputGradient * n.ActivationD1(n.Output())
 	// randomize the bias if overflow
 	if math.IsNaN(n.Bias) || math.IsInf(n.Bias, 0) {
-		Pf("overflow detected, randomizing bias: outputError: %v, activation: %v, bias: %v\n", outputError, n.ActivationName, n.Bias)
+		Pf("overflow detected, randomizing bias: outputGradient: %v, activation: %v, bias: %v\n", outputGradient, n.ActivationName, n.Bias)
 		n.Bias = rand.Float64()*2 - 1
 	}
-	// Assert(!math.IsNaN(n.Bias), Spf("bias is NaN, outputError: %v, activationD1: %v", outputError, n.ActivationName))
 	// Debug("Backprop: node %d errs %v weights %v, bias %v", i, outputErrs, node.Weights, node.Bias)
 
 	// mark cache dirty last so we only use the old output value
@@ -964,123 +961,127 @@ func (n *SimpleNode) updateWeights(outputError float64, inputs []float64, learni
 }
 
 // updateWeights updates the weights of this layer
-func (l *Layer) updateWeights(outputErrors []float64, learningRate float64) {
-	Assert(len(outputErrors) == len(l.Nodes))
+func (l *Layer) updateWeights(outputGradients []float64, learningRate float64) {
+	Assert(len(outputGradients) == len(l.Nodes))
 	for i, node := range l.Nodes {
-		node.updateWeights(outputErrors[i], l.getInputs(), learningRate)
+		node.updateWeights(outputGradients[i], l.getInputs(), learningRate)
 	}
 }
 
 // backprop performs backpropagation on a layer.  It takes a vector of
-// errors as input, updates the weights of the nodes in the layer, and
+// gradients as input, updates the weights of the nodes in the layer, and
 // recurses to the upstream layer.
 // XXX move errs into the node struct, have node calculate its own
-// deltas and errors
-func (l *Layer) backprop(outputErrs []float64, learningRate float64) {
-
-	// handle overflows in the output errors
-	newOutputErrs := make([]float64, len(outputErrs))
-	for i, outputErr := range outputErrs {
-		if math.IsNaN(outputErr) || math.IsInf(outputErr, 0) {
-			Pf("overflow detected, randomizing output error: %v\n", outputErr)
-			newOutputErrs[i] = rand.Float64()*2 - 1
+// deltas and gradients, and update its own weights
+func (l *Layer) backprop(outputGradients []float64, learningRate float64) {
+	// handle overflows in the output gradients
+	newOutputGradients := make([]float64, len(outputGradients))
+	for i, outputGradient := range outputGradients {
+		if math.IsNaN(outputGradient) || math.IsInf(outputGradient, 0) {
+			Pf("overflow detected, randomizing output gradient: %v\n", outputGradient)
+			newOutputGradients[i] = rand.Float64()*2 - 1
 		} else {
-			newOutputErrs[i] = outputErr
+			newOutputGradients[i] = outputGradient
 		}
 	}
-	outputErrs = newOutputErrs
-
-	// Pf("Backprop: outputErrs: %v layer: %#v\n", outputErrs, l)
-
-	// get the errors for the inputs to this layer
-	inputErrors := l.InputErrors(outputErrs)
-
+	outputGradients = newOutputGradients
+	// get the gradients for the inputs to this layer
+	inputGradients := l.InputGradients(outputGradients)
 	// update the input weights in this layer
-	l.updateWeights(outputErrs, learningRate)
-
+	l.updateWeights(outputGradients, learningRate)
 	if l.upstream != nil {
 		// recurse to the upstream layer
-		l.upstream.backprop(inputErrors, learningRate)
+		l.upstream.backprop(inputGradients, learningRate)
 	}
 }
 
-/*
+// Adam is an adaptive learning rate algorithm for gradient descent.
+// See https://arxiv.org/pdf/1412.6980.pdf
+type Adam struct {
+	// learning rate
+	learningRate float64
+	// decay rate for first moment estimate
+	beta1 float64
+	// decay rate for second moment estimate
+	beta2 float64
+	// first moment estimate
+	m []float64
+	// second moment estimate
+	v []float64
+	// bias-corrected first moment estimate
+	mHat []float64
+	// bias-corrected second moment estimate
+	vHat []float64
+	// number of iterations
+	t int
+}
 
-XXX reconcile the following docs with the above
-
-	// We use the chain rule to calculate the partial derivative of the cost
-	// function with respect to the weight:
-	//
-	// XXX
-	// dcost/dweight = dcost/doutput * doutput/dweight
-	//
-	// The cost function is the sum of the squares of the errors.  We
-	// multiply by 0.5 to simplify the derivative.
-	//
-	// cost = 0.5 * (target - output)^2
-	//
-	// The derivative of the cost function with respect to the output
-	// is simply (target - output).
-	//
-	// dcost/doutput = target - output
-
-	// The derivative of the output with respect to the weighted input
-	// is the derivative of the activation function. Why?  Because
-	// the output is the weighted sum of the inputs, which is the
-	// XXX
-
-
-
-	// XXX
-	// doutput/dweight = activationD1(output)
-
-	// The derivative of the weighted sum with respect to a weight is
-	// the output of the related upstream node.  Why?  Because the
-	// weighted sum is the sum of the products of each weight and the
-	// output of the correspending upstream node.  To simplify, if for
-	// example we only had one upstream node, then the weighted sum
-	// would be:
-	//
-	// weightedsum = weight * input
-	//
-	// We can't change the upstream node output, so we can only change
-	// the weight.  So we can think of the above equation in the form
-	// of:
-	//
-	// y = mx + b
-	//
-	// where y is the weighted sum, m is the weight, x is the upstream
-	// node output, and b is the bias.
-	//
-	// The derivative of that equation with respect to m is x:
-	//
-	// dy/dm = x
-	//
-	// So the derivative of the weighted sum with respect to a weight
-	// is simply the input to the node.
-	//
-	// dweightedsum/dweight = input
-	//
-	// So going back to the original equation using the partial
-	// derivatives in the chain rule:
-	//
-	// dcost/dweight = dcost/doutput * doutput/dweightedsum * dweightedsum/dweight
-	//               = (target - output) * activationD1(output) * input
-	//
-	// Let's do it in code:
-	for i, upstreamNode := range n.Upstream {
-		dweightedsum_dweight := upstreamNode.Output()
-		// dcost/dweight = dcost/doutput * doutput/dweightedsum * dweightedsum/dweight
-		dcost_dweight := dcost_doutput * doutput_dweightedsum * dweightedsum_dweight
-		// adjust weight
-		n.Weights[i] += dcost_dweight
-
-		// Now we need to adjust the upstream node weights.  We do
-		// this by calling the upstream node's backprop function. but
-		// we need a target to pass to Backprop().  Let's ask the upstream
-		// node what its target is, passing in what we already know:
-		targetUpstream := upstreamNode.Target(dweightedsum_dweight)
-		// Now we can call the upstream node's backprop function:
-		upstreamNode.Backprop(targetUpstream)
+// NewAdam returns a new Adam optimizer
+func NewAdam(learningRate, beta1, beta2 float64, nWeights int) *Adam {
+	return &Adam{
+		learningRate: learningRate,
+		beta1:        beta1,
+		beta2:        beta2,
+		m:            make([]float64, nWeights),
+		v:            make([]float64, nWeights),
+		mHat:         make([]float64, nWeights),
+		vHat:         make([]float64, nWeights),
 	}
-*/
+}
+
+// Update updates the weights of the given layer using Adam
+func (a *Adam) Update(l *Layer, outputGradients []float64) {
+	// get the gradients for the inputs to this layer
+	inputGradients := l.InputGradients(outputGradients)
+	// update the input weights in this layer
+	a.updateWeights(l, outputGradients)
+	if l.upstream != nil {
+		// recurse to the upstream layer
+		a.Update(l.upstream, inputGradients)
+	}
+}
+
+// updateWeights updates the weights of this layer
+func (a *Adam) updateWeights(l *Layer, outputGradients []float64) {
+	Assert(len(outputGradients) == len(l.Nodes))
+	for i, node := range l.Nodes {
+		node.updateWeightsAdam(outputGradients[i], l.getInputs(), a)
+	}
+}
+
+// updateWeightsAdam updates the weights of this node using Adam.  The Adam
+// algorithm is described in https://arxiv.org/pdf/1412.6980.pdf.  The
+// formulas for the algorithm are:
+//
+// m = beta1 * m + (1 - beta1) * gradient
+// v = beta2 * v + (1 - beta2) * gradient^2
+// mHat = m / (1 - beta1^t)
+// vHat = v / (1 - beta2^t)
+// weight = weight - learningRate * mHat / (sqrt(vHat) + epsilon)
+func (n *SimpleNode) updateWeightsAdam(outputGradient float64, inputs []float64, a *Adam) {
+	epsilon := 1e-8
+	for j, input := range inputs {
+		// update the first moment estimate
+		a.m[j] = a.beta1*a.m[j] + (1-a.beta1)*outputGradient
+		// update the second moment estimate
+		a.v[j] = a.beta2*a.v[j] + (1-a.beta2)*outputGradient*outputGradient
+		// bias-correct the first moment estimate
+		a.mHat[j] = a.m[j] / (1 - math.Pow(a.beta1, float64(a.t)))
+		// bias-correct the second moment estimate
+		a.vHat[j] = a.v[j] / (1 - math.Pow(a.beta2, float64(a.t)))
+		// update the weight
+		n.Weights[j] -= a.learningRate * a.mHat[j] / (math.Sqrt(a.vHat[j]) + epsilon)
+		// if overflow then randomize the weight
+		if math.IsNaN(n.Weights[j]) || math.IsInf(n.Weights[j], 0) {
+			Pf("overflow detected, randomizing weight: input: %v, outputGradient: %v, activation: %v, weight: %v\n", input, outputGradient, n.ActivationName, n.Weights[j])
+			n.Weights[j] = rand.Float64()*2 - 1
+		}
+	}
+	// update the bias
+	n.Bias -= a.learningRate * a.mHat[len(inputs)] / (math.Sqrt(a.vHat[len(inputs)]) + epsilon)
+	// randomize the bias if overflow
+	if math.IsNaN(n.Bias) || math.IsInf(n.Bias, 0) {
+		Pf("overflow detected, randomizing bias: input: %v, outputGradient: %v, activation: %v, bias: %v\n", inputs, outputGradient, n.ActivationName, n.Bias)
+		n.Bias = rand.Float64()*2 - 1
+	}
+}
