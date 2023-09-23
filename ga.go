@@ -226,6 +226,9 @@ func (parent1 *Network) Breed(parent2 *Network) (child *Network, err error) {
 	}
 	cross1 := rand.Intn(len(parent1Layers))
 	cross2 := rand.Intn(len(parent2Layers))
+	// round to nearest statement
+	cross1 = (cross1 / dna.StatementSize) * dna.StatementSize
+	cross2 = (cross2 / dna.StatementSize) * dna.StatementSize
 	// combine dna
 	childLayers := append(parent1Layers[:cross1], parent2Layers[cross2:]...)
 	// create child

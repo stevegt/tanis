@@ -29,6 +29,9 @@ type Statement struct {
 	Arg    float64
 }
 
+// statements are 72 bits -- 8 bits for the opcode, and 64 bits for the argument.
+const StatementSize = 9
+
 // String returns a string representation of the statement.
 func (statement *Statement) String() string {
 	return Spf("%v %f", statement.Opcode, statement.Arg)
