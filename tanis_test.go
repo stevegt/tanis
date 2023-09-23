@@ -7,11 +7,8 @@ package tanis
 // neural networks in several languages.
 
 import (
-	"encoding/csv"
 	"math"
 	"math/rand"
-	"os"
-	"strconv"
 	"testing"
 
 	. "github.com/stevegt/goadapt"
@@ -30,220 +27,547 @@ func TestSigmoid(t *testing.T) {
 	}
 }
 
-// Dense returns a new dense fully-connected layer with sigmoid
-// activation function and the given number of inputs and nodes.
-func Dense(nodes, inputs int) (layer *Layer) {
-	layer = &Layer{}
-	for i := 0; i < nodes; i++ {
-		node := newNode("sigmoid")
-		layer.Nodes = append(layer.Nodes, node)
-	}
-	layer.init(inputs, nil)
-	layer.randomize()
-	return
+func TestActivations(t *testing.T) {
+	shape := "(foo a b c (tanh 4) (sigmoid 5) (+ (tanh x y z w v) (relu u)))"
+	net, err := NewNetwork(shape)
+	Tassert(t, err == nil, err)
+	Tassert(t, net.Layers[1].Nodes[0].ActivationName == "sigmoid", net.Save())
+	Tassert(t, net.Layers[2].Nodes[0].ActivationName == "tanh", net.Save())
+	Tassert(t, net.Layers[2].Nodes[4].ActivationName == "tanh", net.Save())
+	Tassert(t, net.Layers[2].Nodes[5].ActivationName == "relu", net.Save())
 }
 
-// Forward takes a vector of inputs, creates a network
-// with the given layer, runs the inputs through the network
-// and returns the outputs.
-func (l *Layer) Forward(x []float64) (z []float64) {
-	n := &Network{InputCount: len(x), Layers: []*Layer{l}}
-	// Pprint(n)
-	n.init()
-	// Pprint(n)
-	// os.Exit(44)
-	z = n.Predict(x)
-	return
+// Test named inputs and outputs
+func TestNamed(t *testing.T) {
+	// ape := "foo((a b c) (sigmoid(4)) (sigmoid(5)) (linear(6)) (x y z w v u))"
+	shape := "(foo a b c (sigmoid 4) (sigmoid 5) (linear x y z w v u))"
+	net, err := NewNetwork(shape)
+	Tassert(t, err == nil, err)
+
+	// check that the names are set
+	Tassert(t, net.InputNames[0] == "a", net.InputNames)
+	Tassert(t, net.InputNames[1] == "b", net.InputNames)
+	Tassert(t, net.InputNames[2] == "c", net.InputNames)
+	Tassert(t, net.OutputNames[0] == "x", net.OutputNames)
+	Tassert(t, net.OutputNames[1] == "y", net.OutputNames)
+	Tassert(t, net.OutputNames[2] == "z", net.OutputNames)
+	Tassert(t, net.OutputNames[3] == "w", net.OutputNames)
+	Tassert(t, net.OutputNames[4] == "v", net.OutputNames)
+	Tassert(t, net.OutputNames[5] == "u", net.OutputNames)
+
+	// check that all the layers are hooked up
+	Tassert(t, len(net.Layers) == 3, net.Layers)
+	Tassert(t, net.Layers[0].upstream == nil, net.Layers[0].upstream)
+	Tassert(t, net.Layers[1].upstream == net.Layers[0], net.Layers[1].upstream)
+	Tassert(t, net.Layers[2].upstream == net.Layers[1], net.Layers[2].upstream)
+
+	// check the node weights
+	Tassert(t, len(net.Layers[0].Nodes) == 4, net.Layers[0].Nodes)
+	Tassert(t, len(net.Layers[1].Nodes) == 5, net.Layers[1].Nodes)
+	Tassert(t, len(net.Layers[2].Nodes) == 6, net.Layers[2].Nodes)
+	for _, node := range net.Layers[0].Nodes {
+		Tassert(t, len(node.Weights) == 3, node.Weights)
+	}
+	for _, node := range net.Layers[1].Nodes {
+		Tassert(t, len(node.Weights) == 4, node.Weights)
+	}
+	for _, node := range net.Layers[2].Nodes {
+		Tassert(t, len(node.Weights) == 5, node.Weights)
+	}
+
 }
 
-// New returns a new sequential network constructed from the given layers. An
-// error is returned if the number of inputs and outputs in two adjacent layers
-// is not the same.
-func New(layers ...*Layer) (*Network, error) {
-	Assert(len(layers) > 0, "no layers")
-	Assert(len(layers[0].inputs) > 0, "no inputs")
-	for i := 1; i < len(layers); i++ {
-		Assert(len(layers[i].getInputs()) == len(layers[i-1].Nodes), "layer mismatch")
+func TestPredictNamed(t *testing.T) {
+	// linear activation with all weights = 1 and all biases = 0
+	shape := "(foo in (linear 1) (linear out))"
+	net, err := NewNetwork(shape)
+	Tassert(t, err == nil, err)
+	for _, layer := range net.Layers {
+		for _, node := range layer.Nodes {
+			// set all weights to 1
+			for i, _ := range node.Weights {
+				node.Weights[i] = 1
+			}
+			// set all biases to 0
+			node.Bias = 0
+		}
 	}
-	n := &Network{InputCount: len(layers[0].inputs), Layers: layers}
-	n.init()
-	// Pprint(n)
-	// Pf("l2: %#v\n", layers[1])
-	// os.Exit(55)
-	return n, nil
+	inputs := map[string]float64{"in": 1}
+	outputs := net.PredictNamed(inputs)
+	Tassert(t, outputs["out"] == 1, outputs)
+
+	// same but with more layers and nodes
+	shape = "(foo a b c (linear 4 ) (linear 1 ) (linear x y z w v u))"
+	net, err = NewNetwork(shape)
+	for _, layer := range net.Layers {
+		for _, node := range layer.Nodes {
+			// set all weights to 1
+			for i, _ := range node.Weights {
+				node.Weights[i] = 1
+			}
+			// set all biases to 0
+			node.Bias = 0
+		}
+	}
+	inputs = map[string]float64{"a": 1, "b": 1, "c": 1}
+	outputs = net.PredictNamed(inputs)
+	Tassert(t, outputs["y"] == 12, outputs)
 }
 
-func TestForward(t *testing.T) {
-	l := Dense(1, 3)
-	l.setWeights([][]float64{{1.74481176, -0.7612069, 0.3190391}})
-	l.setBiases([]float64{-0.24937038})
-	x1 := []float64{1.62434536, -0.52817175, 0.86540763}
-	y1 := 0.96313579
-	z1 := l.Forward(x1)
-	if math.Abs(z1[0]-y1) > 0.001 {
-		t.Error(z1, y1)
-	}
-	x2 := []float64{-0.61175641, -1.07296862, -2.3015387}
-	y2 := 0.22542973
-	z2 := l.Forward(x2)
-	if math.Abs(z2[0]-y2) > 0.001 {
-		t.Error(z2, y2)
-	}
-}
+func TestCopy(t *testing.T) {
+	// net := NewNetwork("foo", 3, 4, 5, 2)
+	// 	net.SetActivation(2, -1, "linear")
+	// 	net.SetInputNames("a", "b", "c")
+	// 	net.SetOutputNames("x", "y")
+	shape := "(foo a b c (sigmoid 3) (sigmoid 4) (linear 5) (linear x y))"
+	net, err := NewNetwork(shape)
+	Tassert(t, err == nil, err)
+	net2 := net.cp()
+	Tassert(t, net2.Name == net.Name, net2.Name)
 
-// https://mattmazur.com/2015/03/17/a-step-by-step-backpropagation-example/
-func TestWeights(t *testing.T) {
-	l1 := Dense(2, 2)
-	l2 := Dense(2, 2)
-	n, _ := New(l1, l2)
-
-	// Initialise weights
-	l1.setWeights([][]float64{{0.15, 0.2}, {0.25, 0.3}})
-	l1.setBiases([]float64{0.35, 0.35})
-	// Pprint(l1)
-	// os.Exit(87)
-	l2.setWeights([][]float64{{0.4, 0.45}, {0.5, 0.55}})
-	l2.setBiases([]float64{0.6, 0.6})
-	// Pprint(l2)
-	// os.Exit(91)
-
-	// Ensure forward propagation works for both layers
-	// Pprint(n)
-	// Pprint(n.Layers[1].upstream)
-	// Pf("l2: %#v\n", l2)
-	z := n.Predict([]float64{0.05, 0.1})
-	// Pprint(n)
-	// os.Exit(99)
-	if e := math.Abs(z[0] - 0.75136507); e > 0.0001 {
-		t.Error(e, z)
+	for i, _ := range net.InputNames {
+		Tassert(t, net2.InputNames[i] == net.InputNames[i], net2.InputNames[i])
 	}
-	if e := math.Abs(z[1] - 0.772928465); e > 0.0001 {
-		t.Error(e, z)
+	for i, _ := range net.OutputNames {
+		Tassert(t, net2.OutputNames[i] == net.OutputNames[i], net2.OutputNames[i])
 	}
 
-	// Ensure that squared error is calculated correctly (use rate=0 to avoid training)
-	case1 := NewTrainingCase([]float64{0.05, 0.1}, []float64{0.01, 0.99})
-	e := n.trainOne(case1, 0)
-	// Pf("error: %v\n", e)
-	if math.Abs(e-0.298371109) > 0.0001 {
-		t.Log(e)
-	}
-
-	// Backpropagtion with rate 0.5
-	case2 := NewTrainingCase([]float64{0.05, 0.1}, []float64{0.01, 0.99})
-	e = n.trainOne(case2, 0.5)
-	// Pf("error: %v\n", e)
-	// os.Exit(125)
-
-	// check l2 weights and biases
-	// for i, w := range []float64{0.35891648, 0.408666186, 0.530751, 0.511301270, 0.561370121, 0.619049} {
-	for nodenum, wb := range [][]float64{{0.35891648, 0.408666186, 0.530751}, {0.511301270, 0.561370121, 0.619049}} {
-		weights := wb[:2]
-		bias := wb[2]
-		for i, w := range weights {
-			e := math.Abs(w - l2.Nodes[nodenum].Weights[i])
-			if e > 0.001 {
-				t.Error(nodenum, i, w, l2.Nodes[nodenum].Weights[i], e)
+	Tassert(t, len(net2.Layers) == len(net.Layers), net2.Layers)
+	for i, _ := range net.Layers {
+		Tassert(t, len(net2.Layers[i].Nodes) == len(net.Layers[i].Nodes), net2.Layers[i].Nodes)
+		if i == 0 {
+			Tassert(t, net2.Layers[i].upstream == nil, net2.Layers[i].upstream)
+		} else {
+			Tassert(t, net2.Layers[i].upstream == net2.Layers[i-1], net2.Layers[i].upstream)
+		}
+		for j, _ := range net.Layers[i].Nodes {
+			Tassert(t, len(net2.Layers[i].Nodes[j].Weights) == len(net.Layers[i].Nodes[j].Weights), net2.Layers[i].Nodes[j].Weights)
+			Tassert(t, net2.Layers[i].Nodes[j].Bias == net.Layers[i].Nodes[j].Bias, net2.Layers[i].Nodes[j].Bias)
+			Tassert(t, net2.Layers[i].Nodes[j].ActivationName == net.Layers[i].Nodes[j].ActivationName, net2.Layers[i].Nodes[j].ActivationName)
+			Tassert(t, net2.Layers[i].Nodes[j].activation != nil)
+			Tassert(t, net2.Layers[i].Nodes[j].activationD1 != nil)
+			for k, _ := range net.Layers[i].Nodes[j].Weights {
+				Tassert(t, net2.Layers[i].Nodes[j].Weights[k] == net.Layers[i].Nodes[j].Weights[k], net2.Layers[i].Nodes[j].Weights[k])
 			}
 		}
-		e := math.Abs(bias - l2.Nodes[nodenum].Bias)
-		if e > 0.001 {
-			t.Error(nodenum, bias, l2.Nodes[nodenum].Bias, e)
-		}
 	}
+}
 
-	// check l1 weights
-	// for i, w := range []float64{0.149780716, 0.19956143, 0.345614, 0.24975114, 0.29950229, 0.345614} {
-	for nodenum, wb := range [][]float64{{0.149780716, 0.19956143, 0.345614}, {0.24975114, 0.29950229, 0.345614}} {
-		weights := wb[:2]
-		bias := wb[2]
-		for i, w := range weights {
-			e := math.Abs(w - l1.Nodes[nodenum].Weights[i])
-			if e > 0.001 {
-				t.Error(nodenum, i, w, e, l1.Nodes[nodenum].Weights[i])
+func TestMutations(t *testing.T) {
+	rand.Seed(1)
+	// net := NewNetwork("foo", 2, 4, 1)
+	// net.SetActivation(-1, -1, "linear")
+	// net.SetInputNames("a", "b")
+	// net.SetOutputNames("y")
+	shape := "(foo a b (linear 2) (linear 4) (linear y))"
+	net, err := NewNetwork(shape)
+	Tassert(t, err == nil, err)
+	for i, layer := range net.Layers {
+		for j, node := range layer.Nodes {
+			// set all weights to layer*100 + node*10 + weight
+			for k, _ := range node.Weights {
+				node.Weights[k] = float64(i*100) + float64(j*10) + float64(k)
 			}
-		}
-		e := math.Abs(bias - l1.Nodes[nodenum].Bias)
-		if e > 0.001 {
-			t.Error(nodenum, bias, l1.Nodes[nodenum].Bias, e)
+			// set all biases to layer*100 + node*10
+			node.Bias = float64(i*100) + float64(j*10)
 		}
 	}
+
+	net2, err := NewMutatedNetwork(net, 0.1)
+	Tassert(t, err == nil, err)
+	Tassert(t, net2 != nil, net2)
+	Tassert(t, net2.Name == net.Name, net2.Name)
+	Tassert(t, len(net2.InputNames) == len(net.InputNames), net2.InputNames)
+	Tassert(t, len(net2.OutputNames) == len(net.OutputNames), net2.OutputNames)
+	for i, _ := range net.InputNames {
+		Tassert(t, net2.InputNames[i] == net.InputNames[i], net2.InputNames[i])
+	}
+	for i, _ := range net.OutputNames {
+		Tassert(t, net2.OutputNames[i] == net.OutputNames[i], net2.OutputNames[i])
+	}
+
+	net1string := net.DNA().String()
+	net2string := net2.DNA().String()
+	Tassert(t, net1string != net2string, net1string, net2string)
+}
+
+func TestMutationsStress(t *testing.T) {
+	rand.Seed(1)
+	shape := "(foo a b (linear 2) (linear 4) (linear x y))"
+	net, err := NewNetwork(shape)
+	Tassert(t, err == nil, err)
+	cases := &TrainingCases{
+		TrainingCase{
+			Inputs:  map[string]float64{"a": 1, "b": 1, "c": 1},
+			Targets: map[string]float64{"x": 4, "y": 12},
+		},
+	}
+	ok := 0
+	for i := 0; i < 1000; i++ {
+		mutated, err := NewMutatedNetwork(net, 0.1)
+		if err != nil {
+			continue
+		}
+		err = mutated.clean()
+		if err != nil {
+			continue
+		}
+		Tassert(t, mutated != nil, mutated)
+		Tassert(t, mutated.Name == net.Name, mutated.Name)
+		Tassert(t, len(mutated.InputNames) == len(net.InputNames), mutated.InputNames)
+		Tassert(t, len(mutated.OutputNames) == len(net.OutputNames), mutated.OutputNames)
+		for i, _ := range net.InputNames {
+			Tassert(t, mutated.InputNames[i] == net.InputNames[i], mutated.InputNames[i])
+		}
+		for i, _ := range net.OutputNames {
+			Tassert(t, mutated.OutputNames[i] == net.OutputNames[i], mutated.OutputNames[i])
+		}
+		Pf("%d mutated: %v\n", i, mutated.ShapeString())
+		verifyNetReadiness(t, mutated)
+		_ = mutated.PredictNamed((*cases)[0].Inputs)
+		w := NewWorld(mutated, cases, 4, 0.1)
+		mutated.fitness = 0
+		_ = w.Fitness(mutated)
+		ok++
+	}
+	Tassert(t, ok == 710, ok)
+}
+
+func TestBreeding(t *testing.T) {
+	rand.Seed(1)
+	shape := "(foo a b (linear 2) (linear 4) (linear x y))"
+	net, err := NewNetwork(shape)
+	Tassert(t, err == nil, err)
+	cases := &TrainingCases{
+		TrainingCase{
+			Inputs:  map[string]float64{"a": 1, "b": 1, "c": 1},
+			Targets: map[string]float64{"x": 4, "y": 12},
+		},
+	}
+	ok := 0
+	for i := 0; i < 1000; i++ {
+		parent1, err := NewMutatedNetwork(net, 0.1)
+		if err != nil {
+			continue
+		}
+		parent2, err := NewMutatedNetwork(net, 0.1)
+		if err != nil {
+			continue
+		}
+		child, err := parent1.Breed(parent2)
+		if err != nil {
+			continue
+		}
+		err = child.clean()
+		if err != nil {
+			continue
+		}
+		Pf("%d parent1: %v\n", i, parent1.ShapeString())
+		Pf("%d parent2: %v\n", i, parent2.ShapeString())
+		Pf("%d   child: %v\n", i, child.ShapeString())
+		verifyNetReadiness(t, child)
+		_ = child.PredictNamed((*cases)[0].Inputs)
+		w := NewWorld(child, cases, 4, 0.1)
+		child.fitness = 0
+		_ = w.Fitness(child)
+		ok++
+	}
+	Tassert(t, ok == 435, ok)
+}
+
+// verifyWorldReadiness checks that the population is ready for training
+func verifyWorldReadiness(t *testing.T, w *World) {
+	pop := w.pop
+	for _, net := range pop {
+		verifyNetReadiness(t, net)
+	}
+}
+
+// verifyNetReadiness checks that the network is ready for training
+func verifyNetReadiness(t *testing.T, net *Network) {
+	Tassert(t, net.fitness == 0, net.fitness)
+	for i := 0; i < len(net.Layers); i++ {
+		layer := net.Layers[i]
+		// check inputs and upstream
+		var inputCount int
+		if i == 0 {
+			inputCount = len(net.InputNames)
+			Tassert(t, layer.upstream == nil, layer.upstream)
+		} else {
+			inputCount = len(net.Layers[i-1].Nodes)
+			Tassert(t, layer.upstream == net.Layers[i-1], layer.upstream)
+		}
+		// check outputs
+		if i == len(net.Layers)-1 {
+			Tassert(t, len(layer.Nodes) == len(net.OutputNames), len(layer.Nodes))
+		}
+		Tassert(t, len(layer.inputs) == inputCount, len(layer.inputs))
+		// check nodes
+		for j := 0; j < len(layer.Nodes); j++ {
+			node := layer.Nodes[j]
+			Tassert(t, node.cached == false, node.cached)
+			// check weights
+			Tassert(t, len(node.Weights) == inputCount, "len(node.Weights)=%v, inputCount=%v", len(node.Weights), inputCount)
+			// check layer
+			Tassert(t, node.layer == layer, node.layer)
+			// test activation
+			activation, activationD1 := activationFuncs(node.ActivationName)
+			expect := activation(0.5)
+			got := node.activation(0.5)
+			Tassert(t, got == expect, "expect %v, got %v", expect, got)
+			expect = activationD1(0.5)
+			got = node.activationD1(0.5)
+			Tassert(t, got == expect, "expect %v, got %v", expect, got)
+		}
+	}
+}
+
+func TestWorld(t *testing.T) {
+	rand.Seed(1)
+	// net := NewNetwork("foo", 3, 4, 1)
+	// net.SetActivation(-1, -1, "linear")
+	// net.SetInputNames("a", "b", "c")
+	// net.SetOutputNames("y")
+	txt := "(foo a b c (linear 4) (linear y))"
+	net, err := NewNetwork(txt)
+	Tassert(t, err == nil, err)
+	err = net.clean()
+	Ck(err)
+	// set all weights to 1 and all biases to 0
+	for _, layer := range net.Layers {
+		for _, node := range layer.Nodes {
+			// set all weights to 1
+			for i, _ := range node.Weights {
+				node.Weights[i] = 1
+			}
+			// set all biases to 0
+			node.Bias = 0
+		}
+	}
+
+	cases := &TrainingCases{
+		TrainingCase{
+			Inputs:  map[string]float64{"a": 1, "b": 1, "c": 1},
+			Targets: map[string]float64{"y": 12},
+		},
+	}
+	outputs := net.PredictNamed((*cases)[0].Inputs)
+	Tassert(t, outputs["y"] == 12, outputs)
+
+	w := NewWorld(net, cases, 100, 0.1)
+
+	top := w.pop[0]
+	outputs = top.PredictNamed((*cases)[0].Inputs)
+	Tassert(t, outputs["y"] == 12, outputs)
+
+	bottom := w.pop[len(w.pop)-1]
+	outputs = bottom.PredictNamed((*cases)[0].Inputs)
+	Pl("bottom outputs", outputs)
+
+	topFitness := w.Fitness(top)
+	Tassert(t, math.Abs(topFitness) < 0.0001, topFitness)
+
+	bottomFitness := w.Fitness(bottom)
+	Tassert(t, math.Abs(bottomFitness)-12.785167418344809 < 0.0001, bottomFitness)
+
+	for i := 0; i < len(w.pop); i++ {
+		fitness := w.Fitness(w.pop[i])
+		Pl("fitness", i, fitness, w.pop[i].ShapeString())
+	}
+
+	w.sort()
+	w.cull()
+
+	bottom = w.pop[len(w.pop)-1]
+	bottomFitness = w.Fitness(bottom)
+	Tassert(t, math.Abs(bottomFitness)-132 < 0.0001, bottomFitness)
+
+	Pl("top", top.ShapeString())
+	Pl("bottom", bottom.ShapeString())
+	child, err := top.Breed(bottom)
+	Tassert(t, err == nil, err)
+	err = child.clean()
+	Tassert(t, err == nil, err)
+	Pl("child", child.ShapeString())
+
+	// try running predict on each member of the population
+	for i := 0; i < len(w.pop); i++ {
+		ind := w.pop[i]
+		_ = ind.PredictNamed((*cases)[0].Inputs)
+	}
+
+	// try running Fitness on each member of the population
+	for i := 0; i < len(w.pop); i++ {
+		ind := w.pop[i]
+		ind.fitness = 0
+		_ = w.Fitness(ind)
+	}
+
+	// try running Generation bits
+	w.cull()
+	w.clean()
+	Pl("after resetRun")
+	verifyWorldReadiness(t, w)
+	w.breed()
+	Pl("after breed")
+	verifyWorldReadiness(t, w)
+	w.sort()
+
+	w.Generation(false)
 
 }
 
-// Backward calls Backprop for layer l, passing vectors for inputs and
-// errors and a learning rate.
-func (l *Layer) Backward(inputs, errors []float64, rate float64) {
-	l.setInputs(inputs)
-	l.backprop(errors, rate)
+// Test training
+func TestTrainGA(t *testing.T) {
+	rand.Seed(1)
+	// net := NewNetwork("foo", 3, 4, 1)
+	// net.SetActivation(-1, -1, "linear")
+	// net.SetInputNames("a", "b", "c")
+	// net.SetOutputNames("y")
+	txt := "(foo a b c (linear 4) (linear y))"
+	net, err := NewNetwork(txt)
+	Tassert(t, err == nil, err)
+
+	cases := &TrainingCases{
+		TrainingCase{
+			Inputs:  map[string]float64{"a": 1, "b": 1, "c": 1},
+			Targets: map[string]float64{"y": 12},
+		},
+	}
+
+	// train the network
+	parms := TrainingParms{
+		Generations:    10000,
+		PopulationSize: 100,
+		MutationRate:   0.1,
+		MaxError:       0.1,
+		Verbose:        false,
+	}
+	bestNet, meanError, err := net.TrainGA(cases, parms)
+	Tassert(t, err == nil, "meanError: %v, err: %v", meanError, err)
+	Tassert(t, bestNet != nil, "bestNet is nil")
+	Tassert(t, meanError < 0.1, "mean error too high: %v", meanError)
+
+	// make some predictions
+	outputs := bestNet.PredictNamed((*cases)[0].Inputs)
+	Tassert(t, outputs["y"]-12 < 0.1, outputs)
+
 }
 
-// Use single unit layer to predict OR function
-func TestLayerOr(t *testing.T) {
-	x := [][]float64{{0, 0}, {0, 1}, {1, 0}, {1, 1}}
-	y := [][]float64{{0}, {1}, {1}, {1}}
-	e := make([]float64, 1, 1)
-	// A layer of a single unit with two x and one output
-	l := Dense(1, 2)
-	// Train layer for several epochs
-	for epoch := 0; epoch < 1000; epoch++ {
-		for i, x := range x {
-			z := l.Forward(x)
-			e[0] = y[i][0] - z[0]
-			l.Backward(x, e, 1)
-		}
+// predict OR function with no hidden layers
+func TestOr(t *testing.T) {
+	// net := NewNetwork("foo", 2, 2, 1)
+	// net.SetActivation(-1, -1, "sigmoid")
+	// net.SetInputNames("a", "b")
+	// net.SetOutputNames("y")
+	txt := "(foo a b (sigmoid 2) (sigmoid y))"
+	net, err := NewNetwork(txt)
+	Tassert(t, err == nil, err)
+	Tassert(t, len(net.Layers) == 2, len(net.Layers))
+
+	cases := &TrainingCases{
+		TrainingCase{Inputs: map[string]float64{"a": 0, "b": 0}, Targets: map[string]float64{"y": 0}},
+		TrainingCase{Inputs: map[string]float64{"a": 0, "b": 1}, Targets: map[string]float64{"y": 1}},
+		TrainingCase{Inputs: map[string]float64{"a": 1, "b": 0}, Targets: map[string]float64{"y": 1}},
+		TrainingCase{Inputs: map[string]float64{"a": 1, "b": 1}, Targets: map[string]float64{"y": 1}},
 	}
-	// Predict the outputs, expecting only a small error
-	for i, x := range x {
-		z := l.Forward(x)
-		if math.Abs(z[0]-y[i][0]) > 0.1 {
-			t.Error(x, z, y[i])
-		}
+
+	// train the network
+	maxError := 0.2
+	parms := TrainingParms{
+		Generations:    10000,
+		PopulationSize: 100,
+		MutationRate:   0.1,
+		MaxError:       maxError,
 	}
+	rand.Seed(1)
+	bestNet, meanError, err := net.TrainGA(cases, parms)
+	Tassert(t, err == nil, "meanError: %v, err: %v", meanError, err)
+	Tassert(t, bestNet != nil, "bestNet is nil")
+	Tassert(t, meanError < maxError, "mean error too high: %v", meanError)
+
+	// test the network
+	for _, tcase := range *cases {
+		outputs := bestNet.PredictNamed(tcase.Inputs)
+		Tassert(t, outputs["y"]-tcase.Targets["y"] < maxError*2, "inputs: %v, targets: %v, outputs: %v", tcase.Inputs, tcase.Targets, outputs)
+	}
+
 }
 
 // Use hidden layer to predict XOR function
-func TestNetworkXor(t *testing.T) {
-	x := [][]float64{{0, 0}, {0, 1}, {1, 0}, {1, 1}}
-	y := [][]float64{{0}, {1}, {1}, {0}}
-	// n, _ := New(Dense(4, 2), Dense(1, 4))
-	n := NewNetwork("foo", 2, 4, 1)
-	// create training set
-	set := NewTrainingSet()
-	for i, _ := range x {
-		set.Add(x[i], y[i])
-	}
-	// Train at a learning rate of 1 for 10000 iterations or until cost is less than 2%
-	cost, err := n.Train(set, 1, 10000, 0.02)
-	Tassert(t, err == nil, "cost too high: %v", cost)
+func TestXor(t *testing.T) {
+	rand.Seed(1)
+	txt := "(foo a b (sigmoid 2) (sigmoid 2) (sigmoid y))"
+	net, err := NewNetwork(txt)
+	Tassert(t, err == nil, err)
+	Tassert(t, len(net.Layers) == 3, len(net.Layers))
 
-	// Pl(n.Save())
+	cases := &TrainingCases{
+		TrainingCase{Inputs: map[string]float64{"a": 0, "b": 0}, Targets: map[string]float64{"y": 0}},
+		TrainingCase{Inputs: map[string]float64{"a": 0, "b": 1}, Targets: map[string]float64{"y": 1}},
+		TrainingCase{Inputs: map[string]float64{"a": 1, "b": 0}, Targets: map[string]float64{"y": 1}},
+		TrainingCase{Inputs: map[string]float64{"a": 1, "b": 1}, Targets: map[string]float64{"y": 0}},
+	}
+
+	// train the network
+	maxError := 0.1
+	parms := TrainingParms{
+		Generations:    10000,
+		PopulationSize: 100,
+		MutationRate:   0.1,
+		MaxError:       maxError,
+	}
+	bestNet, meanError, err := net.TrainGA(cases, parms)
+	Tassert(t, err == nil, "meanError: %v, err: %v", meanError, err)
+	Tassert(t, bestNet != nil, "bestNet is nil")
+	Tassert(t, meanError < maxError, "mean error too high: %v", meanError)
+
+	// test the network
+	for _, tcase := range *cases {
+		outputs := bestNet.PredictNamed(tcase.Inputs)
+		Tassert(t, outputs["y"]-tcase.Targets["y"] < maxError*2, "inputs: %v, targets: %v, outputs: %v", tcase.Inputs, tcase.Targets, outputs)
+	}
 }
 
 // Use multiple hidden layers to predict sinc(x) function.
 func TestNetworkSinc(t *testing.T) {
+	rand.Seed(1)
 	sinc := func(x float64) float64 {
 		if x == 0 {
 			return 1
 		}
 		return math.Sin(x) / x
 	}
-	n, _ := New(Dense(5, 1), Dense(10, 5), Dense(1, 10))
-	var e float64
-	for i := 0; i < 1000; i++ {
-		e = 0.0
-		for j := 0; j < 100; j++ {
-			x := rand.Float64()*10 - 5
-			case1 := NewTrainingCase([]float64{x}, []float64{sinc(x)})
-			e = e + n.trainOne(case1, 0.5)/100
-		}
-		if e < 0.01 {
-			return
-		}
+	txt := "(foo x (sigmoid 5) (sigmoid 10) (sigmoid 10) (sigmoid y))"
+	net, err := NewNetwork(txt)
+	Tassert(t, err == nil, err)
+	Tassert(t, len(net.Layers) == 4, len(net.Layers))
+
+	// build training cases
+	cases := &TrainingCases{}
+	for j := 0; j < 100; j++ {
+		x := rand.Float64()*10 - 5
+		y := sinc(x)
+		tcase := TrainingCase{Inputs: map[string]float64{"x": x}, Targets: map[string]float64{"y": y}}
+		*cases = append(*cases, tcase)
 	}
-	t.Error("failed to train", e)
+
+	// train the network
+	maxError := 0.01
+	parms := TrainingParms{
+		Generations:    10000,
+		PopulationSize: 100,
+		MutationRate:   0.5,
+		MaxError:       maxError,
+		Verbose:        true,
+	}
+	bestNet, meanError, err := net.TrainGA(cases, parms)
+	Tassert(t, err == nil, "meanError: %v, err: %v", meanError, err)
+	Tassert(t, bestNet != nil, "bestNet is nil")
+	Tassert(t, meanError < maxError, "mean error too high: %v", meanError)
 }
 
+/*
 // Train and test on Iris dataset
 func TestIris(t *testing.T) {
 	x, y := loadCSV("../testdata/iris.csv")
@@ -308,13 +632,6 @@ func BenchmarkSingleThreaded(b *testing.B) {
 	trainingBench(b)
 }
 
-/*
-func BenchmarkMultiThreaded(b *testing.B) {
-	StartPool(3, 10)
-	trainingBench(b)
-}
-*/
-
 func loadCSV(filename string) (x [][]float64, y [][]float64) {
 	f, _ := os.Open(filename)
 	defer f.Close()
@@ -373,52 +690,7 @@ func TestClone(t *testing.T) {
 		}
 	}
 }
-
-func TestActivations(t *testing.T) {
-	net := NewNetwork("foo", 3, 4, 5, 6)
-	net.SetActivation(-1, -1, "tanh")
-	net.SetActivation(1, -1, "sigmoid")
-	net.SetActivation(2, 1, "relu")
-
-	Tassert(t, net.Layers[1].Nodes[0].ActivationName == "sigmoid", net.Save())
-	Tassert(t, net.Layers[2].Nodes[0].ActivationName == "tanh", net.Save())
-	Tassert(t, net.Layers[2].Nodes[1].ActivationName == "relu", net.Save())
-	Tassert(t, net.Layers[2].Nodes[2].ActivationName == "tanh", net.Save())
-}
-
-// Test named inputs and outputs
-func TestNamed(t *testing.T) {
-	net := NewNetwork("foo", 3, 4, 5, 6)
-	net.SetActivation(2, -1, "linear")
-	net.SetInputNames("a", "b", "c")
-	net.SetOutputNames("x", "y", "z", "w", "v", "u")
-
-	// create some named inputs and targets
-	inputs := map[string]float64{"a": 1, "b": 2, "c": 3}
-	targets := map[string]float64{"x": 1, "y": 2, "z": 3, "w": 4, "v": 5, "u": 6}
-
-	// train the network
-	for i := 0; i < 1000; i++ {
-		net.LearnNamed(inputs, targets, 0.1)
-	}
-
-	// make some predictions
-	outputs := net.PredictNamed(inputs)
-	for k, v := range outputs {
-		Tassert(t, math.Abs(v-targets[k]) < 0.1, k, v, targets[k])
-	}
-
-	// try it again, this time without explicitly setting the input and output names
-	net = NewNetwork("foo", 3, 4, 5, 6)
-	net.SetActivation(2, -1, "linear")
-	for i := 0; i < 1000; i++ {
-		net.LearnNamed(inputs, targets, 0.1)
-	}
-	outputs = net.PredictNamed(inputs)
-	for k, v := range outputs {
-		Tassert(t, math.Abs(v-targets[k]) < 0.1, k, v, targets[k])
-	}
-}
+*/
 
 /*
 // Test nested networks

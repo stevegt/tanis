@@ -1,0 +1,62 @@
+// Declare package name -- this is used verbatim as the `package` name
+// at the top of the generated .go:
+package engine
+
+// Declare states with an 's' followed by the state node description.
+// The first word of the description is used as the state node name.
+// Each state name must be unique.
+
+
+s Start
+s NetName 
+s InputName 
+s LayerStart
+s GroupStart
+s GroupEnd
+s ActivationName
+s NodeCount
+s OutputName
+
+// Declare transitions with a 't' followed by the source state, event
+// name, and destination state.  Declare an optional transition method
+// name as part of the event name, after a slash.
+// 
+// Regular expressions can be used as wildcards in the source state
+// field.  The first matching rule will be used.
+
+// (foo a b c (tanh 4) (sigmoid 5) [(tanh 2)(relu 1)] [(tanh x y z v w) (relu u)] )
+t Start Expression/SetName InputName
+t Start Symbol/SetName InputName
+t InputName Symbol/AddInputName InputName
+t InputName Expression LayerStart
+
+t LayerStart Symbol/GrabActivationName ActivationName
+t ActivationName Int/GrabNodeCount NodeCount
+t NodeCount ExpressionEnd/AddNodes LayerEnd
+t LayerEnd Expression LayerStart
+
+t LayerStart Expression GroupStart 
+t GroupStart Symbol/GrabActivationName GroupActivationName
+t GroupActivationName Int/GrabNodeCount GroupNodeCount
+t GroupNodeCount ExpressionEnd/AddNodes GroupEnd
+t GroupEnd Expression GroupStart
+t GroupEnd ExpressionEnd LayerEnd
+
+t GroupActivationName Symbol/AddOutputNode OutputNode
+t OutputNode Symbol/AddOutputNode OutputNode
+t OutputNode ExpressionEnd/AddOutputNodes GroupEnd
+
+
+
+
+t Going Green/Gas Going
+
+t Deciding Stop/Brake Stopped 
+t Deciding Go/Gas Going 
+t Going Red/Gas Beyond
+
+t .* Red/Brake Stopped 
+t .* Yellow/Decide Deciding 
+t .* Green/Gas Going
+t .* Stop/Brake Stopped
+t .* Go/Gas Going
