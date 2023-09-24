@@ -8,6 +8,11 @@ import (
 	_ "net/http/pprof"
 )
 
+// Publisher is an interface that supports a Subscribe method.
+type Publisher interface {
+	Subscribe(int) chan float64
+}
+
 // Topic is a pub/sub topic that fans out single values to multiple
 // subscribers.
 type Topic struct {
@@ -135,11 +140,9 @@ func (a *Aggregator) Subscribe() (c chan []float64) {
 }
 
 // Function is a function which takes a slice of float64 arguments and
-// returns a float64 result.  The number of arguments is specified by
-// ArgCount.
+// returns a float64 result.
 type Function struct {
-	Fn       func(...float64) float64
-	ArgCount int
+	Fn func(...float64) float64
 }
 
 // Node is a node in a dataflow graph.  It has a Function which
@@ -156,7 +159,13 @@ type Node struct {
 // all input channels.  If the node has no input channels, the output
 // is generated immediately by the node's Function on each read of an
 // output channel.
-func NewNode(id uint64, fn Function, inputChans []chan float64) (n *Node) {
+func NewNode(id uint64, fn Function, chanSize int, publishers ...Publisher) (n *Node) {
+
+	// subscribe to the input topics
+	inputChans := make([]chan float64, len(publishers))
+	for i, publisher := range publishers {
+		inputChans[i] = publisher.Subscribe(chanSize)
+	}
 
 	var input *Aggregator
 	if len(inputChans) > 0 {
@@ -199,8 +208,6 @@ func NewNode(id uint64, fn Function, inputChans []chan float64) (n *Node) {
 					return
 				}
 			}
-
-			Assert(len(inputs) == n.Function.ArgCount, "Node %d: expected %d inputs, got %d", n.Id, n.Function.ArgCount, len(inputs))
 
 			// calculate the result
 			result := n.Function.Fn(inputs...)
