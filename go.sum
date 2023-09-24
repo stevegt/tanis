@@ -2,6 +2,10 @@ github.com/davecgh/go-spew v1.1.0 h1:ZDRjVQ15GmhC3fiQ8ni8+OwkZQO4DARzQgrnXU1Liz8
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
+github.com/robskie/bit v0.0.0-20160102045918-ee6891c0e8c0 h1:Ut7mLf5kZvmYxPO2gASMH7cbvjlRT/wj+w7uL+RkVAU=
+github.com/robskie/bit v0.0.0-20160102045918-ee6891c0e8c0/go.mod h1:1REcZvZb2Cq7DP7Anz3PBRd5w6HXc6GZCJGjTiIECvE=
+github.com/robskie/fibvec v0.0.0-20160102053027-8e25a5c13e1c h1:nphWw7NVMaZ1bvoQVth49b+6uCqcnU9nr4nmLRsxwx0=
+github.com/robskie/fibvec v0.0.0-20160102053027-8e25a5c13e1c/go.mod h1:aGrTZ3ZnPHELyIACFGLeNLC/PT8TrN1ldduy17Z6grg=
 github.com/stevegt/goadapt v0.5.0 h1:W9il99vNfdj11T4y9k9uMWbIi+1DqYhbNOekJctzLYM=
 github.com/stevegt/goadapt v0.5.0/go.mod h1:vquRbAl0Ek4iJHCvFUEDxziTsETR2HOT7r64NolhDKs=
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=

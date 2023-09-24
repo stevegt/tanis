@@ -284,7 +284,176 @@ of the data being held in the variable.
 proposal:  
 - refactor to layerless network
 - no initial shape input -- get rid of ./shape
+- nodes are persistent goroutines
+- a net is represented by its top-level node and is garbage-collected
+  when the node is removed from the population
+
+- we break up the components of a neuron into separate functions
+    - activation function
+    - bias addition
+    - weight multiplication
+    - summing
+- the generic function is func([]float64) []float64
+- every function must accept a slice of inputs and return a slice of outputs
+
+
+- each topic is a pub/sub topic
+- each topic is a goroutine that reads from its input channel and fans out to its output channels
+- dna creates topics, one topic for each node
+    - each node has one output, connected to one topic
+    - a node is a topic
+- a subscriber connects each input to a topic
+
+- each node publishes a pub/sub topic
+    - the topic number has a unique uint64 in the dna
+- each node fans its output out to its output channels
+- a node subscribes to one or more topics for each input
+    - each input has a topic number in the dna
+    - this is the topic number
+- create all the nodes (topics) first, put them all in a map
+- then tell each node to subscribe to its inputs, passing in the map
+    - if a topic number is not in the map, then abort subscriber startup 
+    - a subscriber reads a channel from the publishing node
+- then tell each node to start publishing
+
+
+- word generator reads src, has these methods:
+    - ReadByte()
+    - ReadInt64()
+
+
+
+- an instruction starts with a marker.  this is followed by N varints
+  that are the opcode and operands.  
+  that is the length N of the instruction.  this is followed by N
+  varints that are the 
+
+  is followed by a byte that is the function code.  this is followed
+  by a float64 that is the parameter.  this is followed by a
+  compressed bitmask of connections to prior nodes' outputs.
+
+- each dna instruction includes a bitmask of connections to prior nodes' outputs
+    - easy to verify that the dna is valid by just making sure that
+      the bitmask is non-zero
+
+- every instruction is a node creation
+- instruction contents:
+    - function (activation function, bias addition, weight multiplication, summing)
+        - byte
+        - mod this to get opcode
+    - parameter 
+        - float64 
+    - compressed bitmask of connections to prior nodes' outputs
+        - compression needs to support mutation
+        - a sequence of ones represents a one in the uncompressed data
+            - the location of the one = 
+                (current node) - (length of the sequence of ones)^10 mod (number of prior nodes)
+                XXX nope, too dependent on the number of prior nodes
+        - maybe we don't compress this at all
+            
+
+
+
+
+
+
+- dna is a matrix of connections
+    - each cell is a function with a number of parameters
+
+
+
+
+
+- each edge is a pub/sub channel
+- each edge is a goroutine that reads from its input channel and fans out to its output channels
+
+- each node is a goroutine that reads from its input channels, does math, and writes to its output channel
+
+- a nodedge is a goroutine that reads from its input channels, does math, and fans out to its output channels
+
+- a net is y... = f(x...)
+- a subnet is a goroutine that reads x... from its input channels, does math, and fans out y... to its output channels
+
+- the generic function is func([]float64) []float64
+- a generic node is NewNode(func([]float64) []float64) ([]chan float64, []chan []float64, chan error)
+
+
+- functions can be passed through channels
+- currying can be used to pass parameters through channels
+- a dna message is a curry of a function and its parameters
+
+- a generic node is  a configuration message and returns a function
+    - NewNode(conf chan func([]float64) float64) (chan []float64, chan error)
+
+
+
+- we assume that every node added gets output from every existing node
+- the dna is a list of node additions and edge deletions
+
+
+- dna is a fluent-style program, each instruction referencing the
+  most recent node mentioned
+
+
+- we assume that all node inputs are connected to all node outputs
+- dna is a set of deletions
+
+- dna is a list of edges and nodes
+
+
+
+
+
+
+
+
+- the first N nodes are the inputs, the last M nodes are the outputs
+    - minimum DNA size is (N+M)x4
+
+
+
+
+
+
+- each node spawns a goroutine that then executes its own dna after startup
+
+    - func NewNode(dna []byte, outputs chan []float64) (inputs []chan float64, errs chan error)
+    - node gets dna, starts upstream nodes, giving them their dna along with new channels for
+      their outputs, waits for the startup to return their input channels, then starts goroutine and returns its
+      own input channels to caller
+    - node might not keep all output channels it was given at
+      startup; it might pass some of them on to other nodes it
+      creates
+    - node starts at most one upstream node for each output channel it was given at startup
+    - goroutine waits for a message on each input channel, does math, sends copy of output
+      message to each output channel
+
+    - func NewNode(dna []byte, inputCount int, inputs []chan float64, outputs []chan float64, errs chan error)
+    - goroutine accepts one input value on each input channel, does math, sends copy of output
+      value to each output channel
+    - constructor might not keep all output channels it was given;
+      it might pass some of them upstream
+
+
+    - constructor gets dna, starts one upstream node for each output channel, giving them their dna along with new channels, 
+      waits for their startups to return, then starts goroutine.
+
+
+- as a node, at startup we know:
+    - how many input channels we have been given (one for each input value)
+    - how many output channels we have been given (one for each
+      downstream node)
+    - how many nodes we need to create (one for each output channel)
+
+- as a node, from dna we need to know:
+    - which input channels we keep
+    - activation, weight, and bias for each input we keep
+    - which upstream nodes get which input channels we don't keep
+    - which upstream nodes get how many outputs 
+
+
 - each node starts a goroutine
+    - func NewNode(inputs []chan float64) (outputs []chan float64, errors chan error)
 - each node is given one channel for each input
 - each node returns one channel for output
 - each node is given a channel for error output
@@ -293,31 +462,57 @@ proposal:
   the output channel, then closes the output channel
 - the output collector waits for a message on each output channel
   before returning the outputs
-- no node can have more than one input from the same node
-- the dna language has an (OpInput nodeNum) opcode
-    - creates a new input and connects it to an earlier node 
-    - the nodeNum is the index of the node in the dna sequence, modulo
-      the number of nodes
-- the dna language is incapable of creating an invalid net
-- there is no clean()
 - genome is stored on disk -- no more json
-- the dna language includes an (OpSkip int) opcode
-    - jumps forward in the dna sequence by int bytes or end, whichever
-      comes first
-    - allows keeping junk dna in the genome
 - each input has its own weight and bias
     - weight defaults to 1.0, bias defaults to 0.0
     - later instructions can change the weight and bias
 - there is no initial net -- world starts with totally random dna
 - the first N nodes are the inputs, the last M nodes are the outputs
     - minimum DNA size is (N+M)x4
-    - there is no header
-- statements are 128 bits (16 bytes) long
+- breed needs to crossover at statement boundaries
+- there is no clean()
+- the dna language is incapable of creating an invalid net
+    - no node can have more than one input from the same node
+- statements are XXX bytes long
+
+
+
+- the dna language has an (OpInput nodeNum) opcode
+    - creates a new input and connects it to an earlier node 
+    - the nodeNum is the index of the node in the dna sequence, modulo
+      the number of nodes
+
+- first dna byte is version number
+    - there is no other header in v1
+
+
+
+- the dna language uses 256-bit words
+    - first byte is opcode
+
+    - each opcode is one byte
+    - each operand is one byte
+    - each operand is a signed int
+    - the dna language includes an (OpSkip int) opcode
+    - jumps forward in the dna sequence by int bytes or end, whichever
+      comes first
+    - allows keeping junk dna in the genome
+- the dna language includes an (OpSkip int) opcode
+    - jumps forward in the dna sequence by int bytes or end, whichever
+      comes first
+    - allows keeping junk dna in the genome
+
+- OpInput
+    - 0-0: opcode
+    - 1-2: node number
+    - 3-4: input node number
+    - 5-5: 
+    - 4-11: weight
+    - 12-15: bias
     - first byte is the opcode
     - second byte is the node number
     - third byte is the input number
     - fourth byte is the weight
-- breed needs to crossover at statement boundaries
     
 
 
