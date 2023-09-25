@@ -1,6 +1,9 @@
 package node
 
 import (
+	"fmt"
+	"io/ioutil"
+	"math/rand"
 	"net/http"
 	"testing"
 
@@ -8,6 +11,19 @@ import (
 
 	_ "net/http/pprof"
 )
+
+// RandomKey returns a random key from a map. In this code, `K` refers
+// to the key data type, and `V` refers to the value data type. The
+// keyword `comparable` indicates that `K` must be a comparable type,
+// while V can be any type.
+func RandomKey[K comparable, V any](m map[K]V) K {
+	var keys []K
+	for k := range m {
+		keys = append(keys, k)
+	}
+
+	return keys[rand.Intn(len(keys))]
+}
 
 func TestSimple(t *testing.T) {
 	logger = NewLog()
@@ -33,8 +49,8 @@ func TestSimple(t *testing.T) {
 	size := 0
 
 	// create input topics
-	topic0 := NewTopic(size)
-	topic1 := NewTopic(size)
+	topic0 := NewTopic(0, size)
+	topic1 := NewTopic(1, size)
 
 	// create nodes
 	// - subscriptions are the graph edges
@@ -120,7 +136,7 @@ func TestGraph(t *testing.T) {
 	size := 0
 
 	// create a graph with a buffer size of 0
-	// - AddNode calls are the graph edges
+	// - AddNode calls include the graph edges
 	// - this particular graph is a fibonacci sequence
 	g := NewGraph(0)
 	inputTopics := g.NameInputs("a", "b")
@@ -166,4 +182,128 @@ func TestGraph(t *testing.T) {
 	expected := expecteds[len(expecteds)-1]
 	Pf("expected result: %f got %f\n", expected, result)
 	Assert(result == expected, "expected result %f, got %f", expected, result)
+}
+
+func add(args ...float64) float64 {
+	var res float64
+	for _, arg := range args {
+		res += arg
+	}
+	return res
+}
+
+func sub(args ...float64) float64 {
+	var res float64
+	for _, arg := range args {
+		res -= arg
+	}
+	return res
+}
+
+func mul(args ...float64) float64 {
+	var res float64
+	for _, arg := range args {
+		res *= arg
+	}
+	return res
+}
+
+func div(args ...float64) float64 {
+	var res float64
+	for _, arg := range args {
+		res /= arg
+	}
+	return res
+}
+
+func TestNet(t *testing.T) {
+	rand.Seed(1)
+
+	// Build a function table
+	functions := map[string]Function{
+		"add": Function{add},
+		"sub": Function{sub},
+		"mul": Function{mul},
+		"div": Function{div},
+		"one": Function{func(args ...float64) float64 { return 1 }},
+		"two": Function{func(args ...float64) float64 { return 2 }},
+	}
+
+	// Build a small random network using a Graph
+	g := NewGraph(0)
+	inputTopics := g.NameInputs("a", "b", "c")
+	for i := 0; i < 20; i++ {
+		// pick a random function
+		fn := functions[RandomKey(functions)]
+		// pick random inputs for node
+		inputs := make([]Publisher, 0)
+
+		// maybe pick a random input topic
+		if rand.Float64() < 0.1 {
+			inputs = append(inputs, inputTopics[RandomKey(inputTopics)])
+		}
+
+		// pick zero or more random nodes from the existing nodes to use
+		// as inputs
+		for {
+			if rand.Float64() < 0.7 && len(g.Nodes) > 0 {
+				j := rand.Intn(len(g.Nodes))
+				inputs = append(inputs, g.Nodes[j])
+			} else {
+				break
+			}
+		}
+
+		// add the node
+		g.AddNode(uint64(i), fn, inputs...)
+	}
+	Pf("open outputs: %d\n", len(g.OpenOutputs()))
+	// assign names to all of the open outputs
+	var names []string
+	for i := 0; i < len(g.OpenOutputs()); i++ {
+		name := fmt.Sprintf("y%d", i)
+		names = append(names, name)
+	}
+	outputTopics := g.NameOutputs(names...)
+
+	// subscribe to all of the output topics
+	var resultChans []chan float64
+	for _, outputTopic := range outputTopics {
+		resultChans = append(resultChans, outputTopic.Subscribe(0))
+	}
+	Assert(len(g.OpenOutputs()) == 0, "expected 0 open outputs, got %d", g.OpenOutputs)
+
+	// publish values to the input topics
+	for _, inputTopic := range inputTopics {
+		inputTopic.Publish <- rand.Float64()
+	}
+
+	// read results from the result channels
+	var results []float64
+	for _, resultChan := range resultChans {
+		results = append(results, <-resultChan)
+	}
+	Pl(results)
+
+	dot := g.DrawDot()
+	ioutil.WriteFile("/tmp/node_test.dot", []byte(dot), 0644)
+
+	/*
+
+		// simulate the node results
+		expecteds := make([]float64, nodeCount+2)
+		for i := 0; i < nodeCount+2; i++ {
+			switch i {
+			case 0:
+				expecteds[i] = 1.0
+			case 1:
+				expecteds[i] = 2.0
+			default:
+				expecteds[i] = expecteds[i-1] + expecteds[i-2]
+			}
+		}
+		expected := expecteds[len(expecteds)-1]
+		Pf("expected result: %f got %f\n", expected, result)
+		Assert(result == expected, "expected result %f, got %f", expected, result)
+	*/
 }

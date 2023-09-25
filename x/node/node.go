@@ -2,10 +2,13 @@ package node
 
 import (
 	"sync"
+	"time"
 
 	. "github.com/stevegt/goadapt"
 
 	_ "net/http/pprof"
+
+	"github.com/emicklei/dot"
 )
 
 // Log collects messages in a channel and writes them to stdout.
@@ -36,12 +39,15 @@ var logger *Log
 
 // Publisher is an interface that supports a Subscribe method.
 type Publisher interface {
+	GetId() uint64
 	Subscribe(int) chan float64
 }
 
 // Topic is a pub/sub topic that fans out single values to multiple
 // subscribers.
 type Topic struct {
+	// Id is a unique identifier for the topic.
+	Id uint64
 	// Subscribers is a slice of channels which will receive values
 	// published to the topic.
 	Subscribers []chan float64
@@ -50,13 +56,19 @@ type Topic struct {
 	Publish chan float64
 }
 
+// GetId returns the topic's Id.
+func (t *Topic) GetId() uint64 {
+	return t.Id
+}
+
 // NewTopic creates a new Topic. Size is the size of the Publish
 // channel.  If size is 0, the channel is unbuffered.  An unbuffered
 // channel will block the publisher until all subscribers have
 // received the previously published value, which can be useful when
 // needed for barrier problem synchronization.
-func NewTopic(size int) (t *Topic) {
+func NewTopic(id uint64, size int) (t *Topic) {
 	t = &Topic{
+		Id:          id,
 		Subscribers: make([]chan float64, 0),
 		Publish:     make(chan float64, size),
 	}
@@ -99,13 +111,15 @@ func (t *Topic) Subscribe(size int) (c chan float64) {
 // slice.  The output slice is published each time all input topics
 // have received a value.
 type Aggregator struct {
+	Id          uint64
 	InputChans  []chan float64
 	Subscribers []chan []float64
 }
 
 // NewAggregator creates a new Aggregator with the given input topics.
-func NewAggregator(inputChans []chan float64) (a *Aggregator) {
+func NewAggregator(id uint64, inputChans []chan float64) (a *Aggregator) {
 	a = &Aggregator{
+		Id:          id,
 		InputChans:  inputChans,
 		Subscribers: make([]chan []float64, 0),
 	}
@@ -196,10 +210,10 @@ func NewNode(id uint64, fn Function, chanSize int, publishers ...Publisher) (n *
 	var input *Aggregator
 	if len(inputChans) > 0 {
 		// create an aggregator for the input channels
-		input = NewAggregator(inputChans)
+		input = NewAggregator(id, inputChans)
 	}
 
-	output := NewTopic(10)
+	output := NewTopic(id, 10)
 
 	n = &Node{
 		Id:       id,
@@ -257,10 +271,17 @@ func (n *Node) Subscribe(size int) (c chan float64) {
 	return
 }
 
+// GetId returns the node's Id.
+func (n *Node) GetId() uint64 {
+	return n.Id
+}
+
 // Graph is a dataflow graph.
 type Graph struct {
 	Nodes    []*Node
 	ChanSize int
+	gvnodes  map[uint64]*dot.Node
+	gv       *dot.Graph
 }
 
 // NewGraph creates a new Graph with the given size for all channels.
@@ -268,6 +289,8 @@ func NewGraph(size int) (g *Graph) {
 	g = &Graph{
 		Nodes:    make([]*Node, 0),
 		ChanSize: size,
+		gvnodes:  make(map[uint64]*dot.Node),
+		gv:       dot.NewGraph(dot.Directed),
 	}
 	return
 }
@@ -276,6 +299,26 @@ func NewGraph(size int) (g *Graph) {
 func (g *Graph) AddNode(id uint64, fn Function, publishers ...Publisher) (node *Node) {
 	node = NewNode(id, fn, g.ChanSize, publishers...)
 	g.Nodes = append(g.Nodes, node)
+
+	// add node to graphviz graph
+	gvnode := g.gv.Node(Spf("%d", id))
+	g.gvnodes[id] = &gvnode
+	for _, publisher := range publishers {
+		pid := publisher.GetId()
+		// add edge to graphviz graph
+		Assert(pid != id, "Node %v cannot publish to itself", id)
+		from := g.gvnodes[pid]
+		if from == nil {
+			// input node
+			// XXX inputs need to be actual nodes instead of just
+			// topics
+			inputNode := g.gv.Node(Spf("%d", pid))
+			from = &inputNode
+		}
+		to := g.gvnodes[id]
+		Pf("g.gv %v from %v to %v\n", g.gv, from, to)
+		g.gv.Edge(*from, *to)
+	}
 	return
 }
 
@@ -283,7 +326,8 @@ func (g *Graph) AddNode(id uint64, fn Function, publishers ...Publisher) (node *
 func (g *Graph) NameInputs(names ...string) (m map[string]*Topic) {
 	m = make(map[string]*Topic)
 	for _, name := range names {
-		m[name] = NewTopic(g.ChanSize)
+		id := time.Now().UnixNano()
+		m[name] = NewTopic(uint64(id), g.ChanSize)
 	}
 	return
 }
@@ -310,4 +354,9 @@ func (g *Graph) NameOutputs(names ...string) (m map[string]Publisher) {
 		m[name] = node.Output
 	}
 	return
+}
+
+// DrawDot returns a graphviz rendering of the graph.
+func (g *Graph) DrawDot() string {
+	return g.gv.String()
 }
