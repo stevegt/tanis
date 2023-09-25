@@ -8,6 +8,32 @@ import (
 	_ "net/http/pprof"
 )
 
+// Log collects messages in a channel and writes them to stdout.
+type Log struct {
+	MsgChan chan string
+}
+
+// NewLog creates a new Log.
+func NewLog() (l *Log) {
+	l = &Log{
+		MsgChan: make(chan string, 99999),
+	}
+	go func() {
+		for msg := range l.MsgChan {
+			Pl(msg)
+		}
+	}()
+	return
+}
+
+// I logs a message.
+func I(args ...interface{}) {
+	msg := FormatArgs(args...)
+	logger.MsgChan <- msg
+}
+
+var logger *Log
+
 // Publisher is an interface that supports a Subscribe method.
 type Publisher interface {
 	Subscribe(int) chan float64
@@ -231,28 +257,57 @@ func (n *Node) Subscribe(size int) (c chan float64) {
 	return
 }
 
-// Log collects messages in a channel and writes them to stdout.
-type Log struct {
-	MsgChan chan string
+// Graph is a dataflow graph.
+type Graph struct {
+	Nodes    []*Node
+	ChanSize int
 }
 
-// NewLog creates a new Log.
-func NewLog() (l *Log) {
-	l = &Log{
-		MsgChan: make(chan string, 99999),
+// NewGraph creates a new Graph with the given size for all channels.
+func NewGraph(size int) (g *Graph) {
+	g = &Graph{
+		Nodes:    make([]*Node, 0),
+		ChanSize: size,
 	}
-	go func() {
-		for msg := range l.MsgChan {
-			Pl(msg)
-		}
-	}()
 	return
 }
 
-// I logs a message.
-func I(args ...interface{}) {
-	msg := FormatArgs(args...)
-	logger.MsgChan <- msg
+// AddNode adds a node to the graph.
+func (g *Graph) AddNode(id uint64, fn Function, publishers ...Publisher) (node *Node) {
+	node = NewNode(id, fn, g.ChanSize, publishers...)
+	g.Nodes = append(g.Nodes, node)
+	return
 }
 
-var logger *Log
+// NameInputs creates a map of input topics indexed by name.
+func (g *Graph) NameInputs(names ...string) (m map[string]*Topic) {
+	m = make(map[string]*Topic)
+	for _, name := range names {
+		m[name] = NewTopic(g.ChanSize)
+	}
+	return
+}
+
+// OpenOutputs returns a slice of nodes which
+// have no subscribers.
+func (g *Graph) OpenOutputs() (nodes []*Node) {
+	for _, node := range g.Nodes {
+		if len(node.Output.Subscribers) == 0 {
+			nodes = append(nodes, node)
+		}
+	}
+	return
+}
+
+// NameOutputs creates topics for nodes with open outputs and returns a map of
+// topics indexed by name.
+func (g *Graph) NameOutputs(names ...string) (m map[string]Publisher) {
+	m = make(map[string]Publisher)
+	open := g.OpenOutputs()
+	Assert(len(open) == len(names), "Number of names must match number of open outputs")
+	for i, node := range g.OpenOutputs() {
+		name := names[i]
+		m[name] = node.Output
+	}
+	return
+}
