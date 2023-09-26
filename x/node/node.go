@@ -2,7 +2,6 @@ package node
 
 import (
 	"sync"
-	"time"
 
 	. "github.com/stevegt/goadapt"
 
@@ -11,54 +10,60 @@ import (
 	"github.com/emicklei/dot"
 )
 
-// Log collects messages in a channel and writes them to stdout.
-type Log struct {
-	MsgChan chan string
+
+// Publisher is an interface that represents a node in a directed
+// dataflow graph.  It accepts a slice of float64 values and publishes
+// a single float64 value.  It can be used as a node in a dataflow
+// graph.
+// XXX merge Node and Function into Function, rename Publisher to 
+// XXX Node
+type Publisher interface {
+	GetName() string
+	Subscribe(int) chan float64
+	Subscribers() []Publisher
 }
 
-// NewLog creates a new Log.
-func NewLog() (l *Log) {
-	l = &Log{
-		MsgChan: make(chan string, 99999),
+// Edge is a connection between two nodes.
+type Edge struct {
+	From Publisher
+	To   Publisher
+	c chan float64
+}
+
+// NewEdge creates a new edge between two nodes.
+func NewEdge(size int, from, to Publisher) (e *Edge) {
+	e = &Edge{
+		From: from,
+		To:   to,
+		c:    from.Subscribe(size),
 	}
 	go func() {
-		for msg := range l.MsgChan {
-			Pl(msg)
+		defer close(e.c)
+		for {
+			value, ok := <-e.From.Subscribe(size)
+			if !ok {
+				return
+			}
+			e.c <- value
 		}
-	}()
-	return
-}
 
-// I logs a message.
-func I(args ...interface{}) {
-	msg := FormatArgs(args...)
-	logger.MsgChan <- msg
-}
-
-var logger *Log
-
-// Publisher is an interface that supports a Subscribe method.
-type Publisher interface {
-	GetId() uint64
-	Subscribe(int) chan float64
-}
 
 // Topic is a pub/sub topic that fans out single values to multiple
 // subscribers.
 type Topic struct {
 	// Id is a unique identifier for the topic.
-	Id uint64
-	// Subscribers is a slice of channels which will receive values
+	Name string
+	// subscribers is a slice of channels which will receive values
 	// published to the topic.
-	Subscribers []chan float64
+	subscribers []chan float64
 	// Publish is a channel which will receive Values to be published
 	// to the topic.
 	Publish chan float64
 }
 
-// GetId returns the topic's Id.
-func (t *Topic) GetId() uint64 {
-	return t.Id
+// GetName returns the topic's name.
+func (t *Topic) GetName() string {
+	return t.Name
 }
 
 // NewTopic creates a new Topic. Size is the size of the Publish
@@ -66,16 +71,16 @@ func (t *Topic) GetId() uint64 {
 // channel will block the publisher until all subscribers have
 // received the previously published value, which can be useful when
 // needed for barrier problem synchronization.
-func NewTopic(id uint64, size int) (t *Topic) {
+func NewTopic(name string, size int) (t *Topic) {
 	t = &Topic{
-		Id:          id,
-		Subscribers: make([]chan float64, 0),
+		Name:        name,
+		subscribers: make([]chan float64, 0),
 		Publish:     make(chan float64, size),
 	}
 	go func() {
 		defer func() {
 			// notify subscribers on exit
-			for _, subscriber := range t.Subscribers {
+			for _, subscriber := range t.subscribers {
 				close(subscriber)
 			}
 		}()
@@ -88,7 +93,7 @@ func NewTopic(id uint64, size int) (t *Topic) {
 				return
 			}
 			// send the value to all subscribers
-			for _, subscriber := range t.Subscribers {
+			for _, subscriber := range t.subscribers {
 				subscriber <- value
 			}
 		}
@@ -103,23 +108,91 @@ func NewTopic(id uint64, size int) (t *Topic) {
 // which can be useful when needed for barrier problem synchronization.
 func (t *Topic) Subscribe(size int) (c chan float64) {
 	c = make(chan float64, size)
-	t.Subscribers = append(t.Subscribers, c)
+	t.subscribers = append(t.subscribers, c)
 	return
 }
 
-// Aggregator is a fan-in -- it takes several input topics and publishes a single output
+// Subscribers returns a slice of subscribers.
+func (t *Topic) Subscribers() (names []string) {
+	for _, subscriber := range t.subscribers {
+		names = append(names, int2str(cap(subscriber)))
+
+
+// Splitter takes a single input slice and publishes each value to a
+// separate output topic.
+type Splitter struct {
+	Name      string
+	Width     int
+	InputChan chan []float64
+	// Topics is a slice of output topics.  Each topic receives a single
+	// value from the input slice.
+	Topics []*Topic
+}
+
+// Subscribe given a slice position returns a channel which will
+// receive values from that position.  Size is the size of the
+// channel.  If size is 0, the channel is unbuffered.
+func (s *Splitter) Subscribe(i, size int) (c chan float64) {
+	c = s.Topics[i].Subscribe(size)
+	return
+}
+
+// NewSplitter creates a new splitter and returns a slice of output
+// topics.  Width is the number of values in each
+// input slice.  Size is the size of the ouput topic channels.  If
+// size is 0, the channels are unbuffered.
+func NewSplitter(name string, inputNames []string, size int, inputChan chan []float64) (s *Splitter) {
+	s = &Splitter{
+		Name:      name,
+		Width:     len(inputNames),
+		InputChan: inputChan,
+		Topics:    make([]*Topic, len(inputNames)),
+	}
+
+	// create a topic for each value in the input slice
+	for i := range s.Topics {
+		s.Topics[i] = NewTopic(uname(), size)
+	}
+
+	go func() {
+		defer func() {
+			// notify subscribers on exit
+			for _, topic := range s.Topics {
+				close(topic.Publish)
+			}
+		}()
+
+		// read from input channel until it is closed
+		for {
+			// read one slice of values from input channel
+			inputs, ok := <-inputChan
+			if !ok {
+				// channel is closed
+				return
+			}
+
+			// send each value to all subscribers
+			for i, topic := range s.Topics {
+				topic.Publish <- inputs[i]
+			}
+		}
+	}()
+	return
+}
+
+// Joiner takes several input topics and publishes a single output
 // slice.  The output slice is published each time all input topics
 // have received a value.
-type Aggregator struct {
-	Id          uint64
+type Joiner struct {
+	Name        string
 	InputChans  []chan float64
 	Subscribers []chan []float64
 }
 
-// NewAggregator creates a new Aggregator with the given input topics.
-func NewAggregator(id uint64, inputChans []chan float64) (a *Aggregator) {
-	a = &Aggregator{
-		Id:          id,
+// NewJoiner creates a new joiner with the given input topics.
+func NewJoiner(name string, inputChans []chan float64) (a *Joiner) {
+	a = &Joiner{
+		Name:        name,
 		InputChans:  inputChans,
 		Subscribers: make([]chan []float64, 0),
 	}
@@ -172,8 +245,8 @@ func NewAggregator(id uint64, inputChans []chan float64) (a *Aggregator) {
 }
 
 // Subscribe returns a channel which will receive each slice of values
-// published by the aggregator.
-func (a *Aggregator) Subscribe() (c chan []float64) {
+// published by the joiner.
+func (a *Joiner) Subscribe() (c chan []float64) {
 	c = make(chan []float64, 10)
 	a.Subscribers = append(a.Subscribers, c)
 	return
@@ -188,9 +261,9 @@ type Function struct {
 // Node is a node in a dataflow graph.  It has a Function which
 // calculates a result from a slice of input values.
 type Node struct {
-	Id       uint64
+	Name     string
 	Function Function
-	Input    *Aggregator
+	Input    *Joiner
 	Output   *Topic
 }
 
@@ -199,7 +272,7 @@ type Node struct {
 // all input channels.  If the node has no input channels, the output
 // is generated immediately by the node's Function on each read of an
 // output channel.
-func NewNode(id uint64, fn Function, chanSize int, publishers ...Publisher) (n *Node) {
+func NewNode(name string, fn Function, chanSize int, publishers ...Publisher) (n *Node) {
 
 	// subscribe to the input topics
 	inputChans := make([]chan float64, len(publishers))
@@ -207,16 +280,16 @@ func NewNode(id uint64, fn Function, chanSize int, publishers ...Publisher) (n *
 		inputChans[i] = publisher.Subscribe(chanSize)
 	}
 
-	var input *Aggregator
+	var input *Joiner
 	if len(inputChans) > 0 {
-		// create an aggregator for the input channels
-		input = NewAggregator(id, inputChans)
+		// create a joiner for the input channels
+		input = NewJoiner(name, inputChans)
 	}
 
-	output := NewTopic(id, 10)
+	output := NewTopic(name, 10)
 
 	n = &Node{
-		Id:       id,
+		Name:     name,
 		Function: fn,
 		Input:    input,
 		Output:   output,
@@ -240,7 +313,7 @@ func NewNode(id uint64, fn Function, chanSize int, publishers ...Publisher) (n *
 		for {
 			var inputs []float64
 			if inputChan != nil {
-				// read a value slice from the input aggregator
+				// read a value slice from the input joiner
 				in, ok := <-inputChan
 				inputs = in
 				if !ok {
@@ -271,87 +344,115 @@ func (n *Node) Subscribe(size int) (c chan float64) {
 	return
 }
 
-// GetId returns the node's Id.
-func (n *Node) GetId() uint64 {
-	return n.Id
+// GetName returns the node's name.
+func (n *Node) GetName() string {
+	return n.Name
 }
 
 // Graph is a dataflow graph.
 type Graph struct {
-	Nodes    []*Node
-	ChanSize int
-	gvnodes  map[uint64]*dot.Node
-	gv       *dot.Graph
+	// Nodes       []*Node
+	ChanSize    int
+	InputNames  []string
+	OutputNames []string
+	Publishers  map[string]Publisher
+	// input splitter
+	inputs *Splitter
+	// output joiner
+	outputs *Joiner
+	// graphviz bits XXX this feels like a hack though
+	gvnodes map[string]*dot.Node
+	gv      *dot.Graph
 }
 
-// NewGraph creates a new Graph with the given size for all channels.
-func NewGraph(size int) (g *Graph) {
+// NewGraph creates a new Graph with the given size for all channels
+// and the given input and output names.
+//
+// XXX caller should be able to do this:
+//
+//	     g := NewGraph(10, []string{"x", "y"}, []string{"z"})
+//	     g.AddNode("x", ...)
+//	     g.AddNode("y", ...)
+//	     g.AddNode("z", ..., "x", "y")
+//	     ok := g.Verify()
+//		 outputmap := g.F(inputmap) // both are map[string]float64
+func NewGraph(size int, inputNames, outputNames []string) (g *Graph) {
 	g = &Graph{
-		Nodes:    make([]*Node, 0),
-		ChanSize: size,
-		gvnodes:  make(map[uint64]*dot.Node),
-		gv:       dot.NewGraph(dot.Directed),
+		// Nodes:       make([]*Node, 0),
+		ChanSize:    size,
+		InputNames:  inputNames,
+		OutputNames: outputNames,
+		Publishers:  make(map[string]Publisher),
+		gvnodes:     make(map[string]*dot.Node),
+		gv:          dot.NewGraph(dot.Directed),
 	}
+
+	// create input splitter
+	inputChan := make(chan []float64, len(inputNames))
+	g.inputs = NewSplitter(uname(), inputNames, size, inputChan)
+	// add to gv
+	g.gv.Node(Spf("%d", g.inputs.Name))
+
+	// joiner gets created after all nodes are added
+
 	return
 }
 
 // AddNode adds a node to the graph.
-func (g *Graph) AddNode(id uint64, fn Function, publishers ...Publisher) (node *Node) {
-	node = NewNode(id, fn, g.ChanSize, publishers...)
-	g.Nodes = append(g.Nodes, node)
+func (g *Graph) AddNode(name string, fn Function, pubNames ...string) {
+	// find publishers from names
+	publishers := make([]Publisher, len(pubNames))
+	for i, pubName := range pubNames {
+		pub, ok := g.Publishers[pubName]
+		Assert(ok, "Publisher %v not found", pubName)
+		publishers[i] = pub
+	}
+	// node := NewNode(name, fn, g.ChanSize, publishers...)
+	// g.Nodes = append(g.Nodes, node)
 
 	// add node to graphviz graph
-	gvnode := g.gv.Node(Spf("%d", id))
-	g.gvnodes[id] = &gvnode
+	gvnode := g.gv.Node(Spf("%d", name))
+	g.gvnodes[name] = &gvnode
 	for _, publisher := range publishers {
-		pid := publisher.GetId()
+		pname := publisher.GetName()
 		// add edge to graphviz graph
-		Assert(pid != id, "Node %v cannot publish to itself", id)
-		from := g.gvnodes[pid]
+		Assert(pname != name, "Node %v cannot publish to itself", name)
+		from := g.gvnodes[pname]
 		if from == nil {
 			// input node
-			// XXX inputs need to be actual nodes instead of just
-			// topics
-			inputNode := g.gv.Node(Spf("%d", pid))
+			inputNode := g.gv.Node(Spf("%d", pname))
 			from = &inputNode
 		}
-		to := g.gvnodes[id]
+		to := g.gvnodes[name]
 		Pf("g.gv %v from %v to %v\n", g.gv, from, to)
 		g.gv.Edge(*from, *to)
 	}
 	return
 }
 
-// NameInputs creates a map of input topics indexed by name.
-func (g *Graph) NameInputs(names ...string) (m map[string]*Topic) {
+// GetInputs returns a map of input publishers indexed by name.  These
+// publishers are the outputs of the input splitter.  It's possible to
+// provide inputs via either this map or the splitter, but not both,
+// and it's important to close the splitter input channel to shut
+// things down.
+//
+// XXX deprecate.
+func (g *Graph) XXXGetInputs(names ...string) (m map[string]*Topic) {
+	// get input topics from splitter
 	m = make(map[string]*Topic)
-	for _, name := range names {
-		id := time.Now().UnixNano()
-		m[name] = NewTopic(uint64(id), g.ChanSize)
+	for i, name := range g.InputNames {
+		m[name] = g.inputs.Topics[i]
 	}
 	return
 }
 
-// OpenOutputs returns a slice of nodes which
+// OpenOutputs returns a slice of publisher names which
 // have no subscribers.
-func (g *Graph) OpenOutputs() (nodes []*Node) {
-	for _, node := range g.Nodes {
-		if len(node.Output.Subscribers) == 0 {
-			nodes = append(nodes, node)
+func (g *Graph) OpenOutputs() (names []string) {
+	for name, pub := range g.Publishers {
+		if len(pub.Subscribers()) == 0 {
+			names = append(names, name)
 		}
-	}
-	return
-}
-
-// NameOutputs creates topics for nodes with open outputs and returns a map of
-// topics indexed by name.
-func (g *Graph) NameOutputs(names ...string) (m map[string]Publisher) {
-	m = make(map[string]Publisher)
-	open := g.OpenOutputs()
-	Assert(len(open) == len(names), "Number of names must match number of open outputs")
-	for i, node := range g.OpenOutputs() {
-		name := names[i]
-		m[name] = node.Output
 	}
 	return
 }
@@ -359,4 +460,17 @@ func (g *Graph) NameOutputs(names ...string) (m map[string]Publisher) {
 // DrawDot returns a graphviz rendering of the graph.
 func (g *Graph) DrawDot() string {
 	return g.gv.String()
+}
+
+var uniqueId uint64
+
+// uname returns a unique name string
+func uname() string {
+	uniqueId++
+	return Spf("u%d", uniqueId)
+}
+
+// int2str returns a string representation of an int
+func int2str(i int) string {
+	return Spf("%d", i)
 }
