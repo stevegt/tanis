@@ -1,11 +1,7 @@
 package node
 
 import (
-	"fmt"
-	"io/ioutil"
 	"math/rand"
-	"net/http"
-	"sync"
 	"testing"
 
 	. "github.com/stevegt/goadapt"
@@ -25,6 +21,35 @@ func RandomKey[K comparable, V any](m map[K]V) K {
 
 	return keys[rand.Intn(len(keys))]
 }
+
+func TestEdge(t *testing.T) {
+	// create an edge
+	edge := NewEdge("a", 0)
+
+	// subscribe to the edge
+	rc1 := edge.Subscribe(0)
+	rc2 := edge.Subscribe(0)
+
+	// publish a value to the edge
+	edge.Send(1.0)
+	close(edge.Publish)
+
+	// read the result from the result channels
+	var result float64
+	result = <-rc1
+	Tassert(t, result == 1.0, "expected result %f, got %f", 1.0, result)
+	result = <-rc2
+	Tassert(t, result == 1.0, "expected result %f, got %f", 1.0, result)
+	for result = range rc1 {
+		Tassert(t, false, "got extra result %f", result)
+	}
+	for result = range rc2 {
+		Tassert(t, false, "got extra result %f", result)
+	}
+
+}
+
+/*
 
 func TestSimple(t *testing.T) {
 	logger = NewLog()
@@ -56,16 +81,16 @@ func TestSimple(t *testing.T) {
 	// create nodes
 	// - subscriptions are the graph edges
 	// - this particular graph is a fibonacci sequence
-	nodes := make([]*Node, nodeCount)
+	nodes := make([]*Graph, nodeCount)
 	for i := 0; i < nodeCount; i++ {
 		name := fmt.Sprintf("%d", i)
 		switch i {
 		case 0:
-			nodes[i] = NewNode(name, addFn, size, topic0, topic1)
+			nodes[i] = NewGraph(name, addFn, size, topic0, topic1)
 		case 1:
-			nodes[i] = NewNode(name, addFn, size, topic1, nodes[i-1])
+			nodes[i] = NewGraph(name, addFn, size, topic1, nodes[i-1])
 		default:
-			nodes[i] = NewNode(name, addFn, size, nodes[i-2], nodes[i-1])
+			nodes[i] = NewGraph(name, addFn, size, nodes[i-2], nodes[i-1])
 		}
 	}
 
@@ -273,6 +298,7 @@ func TestNet(t *testing.T) {
 	g := NewGraph(0)
 	inputTopics := g.NameInputs("a", "b", "c")
 	for i := 0; i < 20; i++ {
+		OldNode
 		// pick a random function
 		fn := functions[RandomKey(functions)]
 		// pick random inputs for node
@@ -288,7 +314,7 @@ func TestNet(t *testing.T) {
 		for {
 			if rand.Float64() < 0.7 && len(g.Nodes) > 0 {
 				j := rand.Intn(len(g.Nodes))
-				inputs = append(inputs, g.Nodes[j])
+				inOldNode = append(inputs, g.Nodes[j])
 			} else {
 				break
 			}
@@ -328,22 +354,5 @@ func TestNet(t *testing.T) {
 	dot := g.DrawDot()
 	ioutil.WriteFile("/tmp/node_test.dot", []byte(dot), 0644)
 
-	/*
-
-		// simulate the node results
-		expecteds := make([]float64, nodeCount+2)
-		for i := 0; i < nodeCount+2; i++ {
-			switch i {
-			case 0:
-				expecteds[i] = 1.0
-			case 1:
-				expecteds[i] = 2.0
-			default:
-				expecteds[i] = expecteds[i-1] + expecteds[i-2]
-			}
-		}
-		expected := expecteds[len(expecteds)-1]
-		Pf("expected result: %f got %f\n", expected, result)
-		Assert(result == expected, "expected result %f, got %f", expected, result)
-	*/
 }
+*/

@@ -1,13 +1,11 @@
 package node
 
 import (
-	"sync"
+	// "sync"
 
 	. "github.com/stevegt/goadapt"
 
 	_ "net/http/pprof"
-
-	"github.com/emicklei/dot"
 )
 
 // Log collects messages in a channel and writes them to stdout.
@@ -35,4 +33,3 @@ func I(args ...interface{}) {
 }
 
 var logger *Log
-

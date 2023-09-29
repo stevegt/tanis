@@ -550,7 +550,67 @@ proposal:
 
 
 
-    
+proposal:
+- a graph has an F(inputmap map[string]float64) (outputMap map[string]float64) function
+- a node can encapsulate an entire graph
+- a graph is a node, a node is a graph
+- a node keeps track of the graphviz representation of its own internal graph
+- a node has an F(inputmap map[string]float64) (outputMap map[string]float64) function
+- a node internally converts each inputMap or outputMap to a slice of float64 channels
+- a node has a function
+- a function is func([]float64) []float64
+- a node is NewNode(inputNames []string, outputNames []string, f func([]float64) []float64) (\*Node, error)
+- a node is responsible for internally mapping its input and output names to the function's input and output slices
+- a node maintains its own internal channels connecting the nodes it creates directly
+- channels are private, available to other nodes, but not the caller
 
+proposal:
+- we want nodes to be able to eventually be distributed across the
+  network, so we want channels to be the only way to communicate
+  between nodes
+- channels have names
+- g.AddNode(name string, f func([]float64) []float64, inputNames, outputnames string) error
+- g.AddNode creates edges by matching new node input names with existing channel names
+- Graph holds nodes: map[chan name]\*node
+- g.AddNode calls node.Subscribe(name) and hands the new channel to new node
+- we convert uint64 ids to string names during DNA read
+- type Edge chan float64
+- func (edge \*Edge) Subscribe() (chan float64, error)
+    - creates a new channel and a goroutine 
 
+proposal:
+- graph and node both implement the Function interface
+- a Function is func(inputMap map[string]float64) (outputMap map[string]float64)
+- nodes don't use channels
+- nodes only have node.F(inputMap map[string]float64) (outputMap map[string]float64) 
+- we use a helper to convert between maps and slices of float64 for simple
+  function definitions
+- graph knows channels, uses them to connect internal nodes
+- the zero-value of a graph is a valid graph
+- the zero-value of a node is a valid node
+```
+type Function interface {
+    F(inputMap map[string]float64) (outputMap map[string]float64)
+    InputNames() []string
+    OutputNames() []string
+}
+// Graph signatures:
+//  F(inputMap map[string]float64) (outputMap map[string]float64)
+//  InputNames() []string
+//  OutputNames() []string
+//  AddNode(name string, f func(inputMap map[string]float64) (outputMap map[string]float64)) error
+//  OpenInputs() (inputMap map[string]chan float64) 
+//  OpenOutputs() (outputMap map[string]chan float64)
+//  Start() error
+type Graph struct {
+    Name string
+    // inputs is a map of channel names to the nodes that consume those channels
+    inputs map[string]\*Node
+    // outputs is a map of channel names to the nodes that emit those channels
+    outputs map[string]\*Node
+}
+type Node struct {
+    f func(inputMap map[string]float64) (outputMap map[string]float64)
+}
+```
 

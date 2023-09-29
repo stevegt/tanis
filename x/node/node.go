@@ -1,52 +1,296 @@
 package node
 
 import (
-	"sync"
-
 	. "github.com/stevegt/goadapt"
 
 	_ "net/http/pprof"
-
-	"github.com/emicklei/dot"
 )
 
+/*
 
-// Publisher is an interface that represents a node in a directed
-// dataflow graph.  It accepts a slice of float64 values and publishes
-// a single float64 value.  It can be used as a node in a dataflow
-// graph.
-// XXX merge Node and Function into Function, rename Publisher to 
-// XXX Node
-type Publisher interface {
-	GetName() string
-	Subscribe(int) chan float64
-	Subscribers() []Publisher
-}
 
-// Edge is a connection between two nodes.
+- a graph has an F(inputmap map[string]float64) (outputMap map[string]float64) function
+- a node can encapsulate an entire graph
+- a graph is a node, a node is a graph
+- a node keeps track of the graphviz representation of its own internal graph
+- a node has an F(inputmap map[string]float64) (outputMap map[string]float64) function
+- a node internally converts each inputMap or outputMap to a slice of float64 channels
+- a node has a function
+- a node is NewNode(inputNames []string, outputNames []string, f func([]float64) []float64) (\*Node, error)
+- a node is responsible for internally mapping its input and output names to the function's input and output slices
+- a node maintains its own internal channels connecting the nodes it creates directly
+- channels are private, available to other nodes, but not the caller
+*/
+
+// Edge is a hyperedge of one or more float64 channels.  An edge has a
+// Subscribe() method which returns a channel which will receive
+// values sent to the edge.  To send values to the edge, send them to
+// the edge's Publish channel or call the edge's Send() method.
 type Edge struct {
-	From Publisher
-	To   Publisher
-	c chan float64
+	// Name is the edge's name.
+	Name string
+	// Publish is a channel which can be used to send values to the
+	// edge.
+	Publish chan float64
+	// Subscribers is a slice of channels which will receive values
+	// sent to the edge.
+	Subscribers []chan float64
 }
 
-// NewEdge creates a new edge between two nodes.
-func NewEdge(size int, from, to Publisher) (e *Edge) {
+// NewEdge creates a new edge with the given name and size.  Size is
+// the size of the Publish channel.  If size is 0, the channel is
+// unbuffered.  An unbuffered channel will block the publisher until
+// all subscribers have received the previously published value,
+// which can be useful when needed for barrier problem
+// synchronization.
+func NewEdge(name string, size int) (e *Edge) {
 	e = &Edge{
-		From: from,
-		To:   to,
-		c:    from.Subscribe(size),
+		Name:        name,
+		Publish:     make(chan float64, size),
+		Subscribers: make([]chan float64, 0),
 	}
 	go func() {
-		defer close(e.c)
+		defer func() {
+			// notify subscribers on exit
+			for _, subscriber := range e.Subscribers {
+				close(subscriber)
+			}
+		}()
+
 		for {
-			value, ok := <-e.From.Subscribe(size)
+			// wait for a value to be published
+			value, ok := <-e.Publish
 			if !ok {
+				// channel is closed
 				return
 			}
-			e.c <- value
+			// send the value to all subscribers
+			for _, subscriber := range e.Subscribers {
+				subscriber <- value
+			}
 		}
+	}()
+	return
+}
 
+// Subscribe returns a channel which will receive values published to
+// the edge.  Size is the size of the channel.  If size is 0, the
+// channel is unbuffered.  An unbuffered channel can be used to block
+// other subscribers until this subscriber has received the value;
+// this might be useful if needed for barrier problem synchronization.
+func (e *Edge) Subscribe(size int) (c chan float64) {
+	c = make(chan float64, size)
+	e.Subscribers = append(e.Subscribers, c)
+	return
+}
+
+// Send sends a value to the edge.
+func (e *Edge) Send(value float64) {
+	e.Publish <- value
+}
+
+// Function is a function that accepts a slice of float64 values and
+// returns a slice of float64 values.
+type Function func([]float64) []float64
+
+// graphFn is a function that accepts a map of float64 values and
+
+/*
+// Node is an interface for a node in a dataflow graph.
+type Node interface {
+	// GetName returns the node's name.
+	GetName() string
+	// F executes the node's function.
+	F(inputMap map[string]float64) (outputMap map[string]float64)
+	// internal use
+	setInputChannels(map[string]*Edge)
+	getOutputEdges() map[string]*Edge
+}
+*/
+
+//
+
+/*
+// NewFunction creates a new function.
+func NewFunction(name string, size int, inputNames, outputNames []string, fn func([]float64) []float64) (f Function) {
+	f = Function{
+		Name: name,
+		InputNames: inputNames,
+		OutputNames: outputNames,
+		Fn:   fn,
+	}
+
+	// create input and output edges
+
+
+
+	return
+}
+
+// GetName returns the function's name.
+func (f *Function) GetName() string {
+	return f.Name
+}
+
+// F executes the function.
+func (f *Function) F(inputMap map[string]float64) (outputMap map[string]float64) {
+	// convert input map to slice
+	inputs := make([]float64, len(inputMap))
+	i := 0
+
+
+
+
+// Graph is a dataflow graph.  A graph manages its own internal edges.
+//
+// XXX caller should be able to do this:
+//
+//	     g := NewNode("foo", []string{"x", "y"}, []string{"z"})
+//	     g.AddNode("", addFn, []string{"x", "y"}, []string{"a"})
+//	     g.AddNode("", addFn, []string{"a", "y"}, []string{"z"})
+//	     err := g.Start()
+//		 outputmap := g.F(inputmap) // both are map[string]float64
+type Graph struct {
+	Name        string
+	fn          Function
+	InputNames  []string
+	OutputNames []string
+	// internal nodes created by this node
+	// map[nodeName]*Node
+	nodes map[string]*Graph
+	// edges connecting internal nodes
+	// map[edgeName]chan float64
+	edges map[string]*Edge
+	// internal channels for connecting things together
+	chans map[string]chan float64
+
+	// graphviz bits
+	gvnodes map[string]*dot.Node
+	gv      *dot.Graph
+}
+
+// NewGraph creates a new node with the given name and input and
+// output edge names.  The input and output edge names are used later
+// in either the AddNode() or SetFunction() methods.  Size is the
+// size of the internal edges.  If size is 0, the channels are
+// unbuffered.  An unbuffered channel will block the publisher until
+// all subscribers have received the previously published value, which
+// might be useful if needed for barrier problem synchronization.
+func NewGraph(name string, size int, inputNames, outputNames []string) (n *Graph) {
+
+	// create input and output edges
+	edges := make(map[string]*Edge)
+	for _, inputName := range inputNames {
+		edges[inputName] = NewEdge(inputName, size)
+	}
+	for _, outputName := range outputNames {
+		edges[outputName] = NewEdge(outputName, size)
+	}
+	n = newNode(name, size, inputNames, outputNames, edges)
+	return
+}
+
+// newNode creates a new node with the given name and input and
+// output edge names and edges.
+func newNode(name string, size int, inputNames, outputNames []string, edges map[string]*Edge) (n *Graph) {
+	if name == "" {
+		name = uname()
+	}
+	// ensure input and output names are unique
+	allNames := make(map[string]bool)
+	for _, inputName := range inputNames {
+		Assert(!allNames[inputName], "Duplicate input name %v", inputName)
+		allNames[inputName] = true
+	}
+	for _, outputName := range outputNames {
+		Assert(!allNames[outputName], "Duplicate output name %v", outputName)
+		allNames[outputName] = true
+	}
+
+	// create graphviz nodes for input and output edge names
+	for _, inputName := range inputNames {
+		gvnode := n.gv.Node(inputName)
+		n.gvnodes[inputName] = &gvnode
+		// set node shape
+		n.gvnodes[inputName].Attr("shape", "box")
+	}
+	for _, outputName := range outputNames {
+		gvnode := n.gv.Node(outputName)
+		n.gvnodes[outputName] = &gvnode
+		// set node shape
+		n.gvnodes[outputName].Attr("shape", "box")
+	}
+
+	// create node
+	n = &Graph{
+		Name:        name,
+		InputNames:  inputNames,
+		OutputNames: outputNames,
+		nodes:       make(map[string]*Graph),
+		edges:       edges,
+		gvnodes:     make(map[string]*dot.Node),
+		gv:          dot.NewGraph(dot.Directed),
+	}
+
+	return
+}
+
+// SetFunction sets the node's function.  The input and output edge
+// names given in the NewNode() method are mapped to the function's
+// input and output slices in the order given. It is an error to call
+// this method if AddNode has been called.
+func (n *Graph) SetFunction(fn Function) (err error) {
+	defer Return(&err)
+	Assert(len(n.nodes) == 0, "Cannot set function after adding nodes")
+	n.fn = fn
+	return
+}
+
+// AddNode adds a node to the parent node's internal graph.  If name
+// is empty, a unique node name is generated.  The inputnames are a
+// list of edge names that have already been added to the graph.  If
+// any of the output edge names match a parent node's output edge
+// name, the new node's output will be used as the parent node's
+// output when F() is called.  If any output name is empty, a unique
+// name is generated and can be retrieved from the node's OutputNames
+// field. It is an error to call this method if SetFunction has been
+// called.
+func (n *Graph) AddNode(name string, size int, fn Function, inputNames, outputNames []string) (nn *Graph, err error) {
+	defer Return(&err)
+	Assert(n.fn == nil, "Cannot add nodes after setting function")
+	if name == "" {
+		name = uname()
+	}
+
+	edges := make(map[string]*Edge)
+
+	// ensure input names are valid edge names in the parent node
+	for _, inputName := range inputNames {
+		edge, ok := n.edges[inputName]
+		Assert(ok, "Edge %v not found", inputName)
+		edges[inputName] = edge
+	}
+	// create output names if needed
+	for i, outputName := range outputNames {
+		if outputName == "" {
+			outputName = uname()
+			outputNames[i] = outputName
+		}
+	}
+	// create output edges or use parent node's output edges
+	for _, outputName := range outputNames {
+		// create output edge if needed
+		edge, ok := n.edges[outputName]
+		if !ok {
+			edges[outputName] = NewEdge(outputName, size)
+		} else {
+			edges[outputName] = edge
+		}
+	}
+	// create new node
+	nn = newNode(name, size, inputNames, outputNames, edges)
+	return
+}
 
 // Topic is a pub/sub topic that fans out single values to multiple
 // subscribers.
@@ -117,6 +361,9 @@ func (t *Topic) Subscribers() (names []string) {
 	for _, subscriber := range t.subscribers {
 		names = append(names, int2str(cap(subscriber)))
 
+	}
+	return
+}
 
 // Splitter takes a single input slice and publishes each value to a
 // separate output topic.
@@ -180,17 +427,17 @@ func NewSplitter(name string, inputNames []string, size int, inputChan chan []fl
 	return
 }
 
-// Joiner takes several input topics and publishes a single output
-// slice.  The output slice is published each time all input topics
-// have received a value.
+// Joiner takes several input channels and publishes a single slice.
+// The output slice is published each time all input topics have
+// received a value.
 type Joiner struct {
-	Name        string
-	InputChans  []chan float64
-	Subscribers []chan []float64
+	Name       string
+	InputChans []chan float64
 }
 
-// NewJoiner creates a new joiner with the given input topics.
-func NewJoiner(name string, inputChans []chan float64) (a *Joiner) {
+// NewJoiner creates a new joiner with the given input channels and
+// returns a channel of slices.
+func NewJoiner(name string, size int, inputChans []chan float64) (a *Joiner) {
 	a = &Joiner{
 		Name:        name,
 		InputChans:  inputChans,
@@ -251,16 +498,12 @@ func (a *Joiner) Subscribe() (c chan []float64) {
 	a.Subscribers = append(a.Subscribers, c)
 	return
 }
+*/
 
-// Function is a function which takes a slice of float64 arguments and
-// returns a float64 result.
-type Function struct {
-	Fn func(...float64) float64
-}
-
-// Node is a node in a dataflow graph.  It has a Function which
+/*
+// OldNode is a node in a dataflow graph.  It has a Function which
 // calculates a result from a slice of input values.
-type Node struct {
+type OldNode struct {
 	Name     string
 	Function Function
 	Input    *Joiner
@@ -272,7 +515,7 @@ type Node struct {
 // all input channels.  If the node has no input channels, the output
 // is generated immediately by the node's Function on each read of an
 // output channel.
-func NewNode(name string, fn Function, chanSize int, publishers ...Publisher) (n *Node) {
+func NewOldNode(name string, fn Function, chanSize int, publishers ...Publisher) (n *OldNode) {
 
 	// subscribe to the input topics
 	inputChans := make([]chan float64, len(publishers))
@@ -288,7 +531,7 @@ func NewNode(name string, fn Function, chanSize int, publishers ...Publisher) (n
 
 	output := NewTopic(name, 10)
 
-	n = &Node{
+	n = &OldNode{
 		Name:     name,
 		Function: fn,
 		Input:    input,
@@ -339,13 +582,13 @@ func NewNode(name string, fn Function, chanSize int, publishers ...Publisher) (n
 // for barrier problem synchronization.  A buffered channel might be
 // used with cyclic graphs in neural networks to provide state
 // feedback.
-func (n *Node) Subscribe(size int) (c chan float64) {
+func (n *OldNode) Subscribe(size int) (c chan float64) {
 	c = n.Output.Subscribe(size)
 	return
 }
 
 // GetName returns the node's name.
-func (n *Node) GetName() string {
+func (n *OldNode) GetName() string {
 	return n.Name
 }
 
@@ -461,6 +704,7 @@ func (g *Graph) OpenOutputs() (names []string) {
 func (g *Graph) DrawDot() string {
 	return g.gv.String()
 }
+*/
 
 var uniqueId uint64
 
