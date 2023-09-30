@@ -168,7 +168,9 @@ func NewEdge(name string, size int) (e *Edge) {
 			}
 			// send the value to all subscribers
 			for _, subscriber := range e.Subscribers {
+				Debug("edge %s sending %v to subscriber addr %v\n", e.Name, value, &subscriber)
 				subscriber <- value
+				Debug("edge %s sent %v to subscriber\n", e.Name, value)
 			}
 		}
 	}()
@@ -182,13 +184,16 @@ func NewEdge(name string, size int) (e *Edge) {
 // this might be useful if needed for barrier problem synchronization.
 func (e *Edge) Subscribe(size int) (c chan float64) {
 	c = make(chan float64, size)
+	Debug("edge %s subscribe creating chan addr %v\n", e.Name, &c)
 	e.Subscribers = append(e.Subscribers, c)
 	return
 }
 
 // Send sends a value to the edge.
 func (e *Edge) Send(value float64) {
+	Debug("edge sending %v to %v\n", value, e.Name)
 	e.Publish <- value
+	Debug("edge sent %v to %v\n", value, e.Name)
 }
 
 // Graph is a collection of Nodes and Graphs. Graph implements the
@@ -199,33 +204,36 @@ type Graph struct {
 	Size        int
 	InputNames  []string
 	OutputNames []string
-	// nodes is a map of node names to nodes
+	// nodes is a map of all node names to nodes
 	nodes map[string]Function
-	// edges is a map of edge names to edges
+	// edges is a map of all edge names to edges
 	edges map[string]*Edge
-	// edgeNodes is a map of edge names to nodes
+	// edgeNodes is a map of all edge names to nodes
 	edgeNodes map[string]Function
-	// inputs is a map of node names to channels that are
+	// nodeInputs is a map of all node names to channels that are
 	// subscribed to the edge of the same name
-	inputs map[string]chan float64
-	// outputs is a map of edge names to channels that are
-	// subscribed to the edges
-	outputs map[string]chan float64
+	// nodeInputs map[string]chan float64
+	// nodeOutputs is a map of all edge names to channels that are
+	// subscribed to the edge of the same name
+	// nodeOutputs map[string]chan float64
+	// graphOutputChan is a channel created by join(), and contains
+	// the final output map created by the graph
+	graphOutputChan chan map[string]float64
 }
 
 // NewGraph creates a new graph with the given channel buffer size and
 // input and output edge names.
-func NewGraph(name string, size int, inputNames, outputNames []string) (g *Graph) {
+func NewGraph(name string, size int, inputNames []string) (g *Graph) {
 	g = &Graph{
 		Name:        name,
 		Size:        size,
 		InputNames:  inputNames,
-		OutputNames: outputNames,
+		OutputNames: make([]string, 0),
 		nodes:       make(map[string]Function),
 		edges:       make(map[string]*Edge),
 		edgeNodes:   make(map[string]Function),
-		inputs:      make(map[string]chan float64),
-		outputs:     make(map[string]chan float64),
+		// nodeInputs:  make(map[string]chan float64),
+		// nodeOutputs: make(map[string]chan float64),
 	}
 
 	// create an edge for each graph input
@@ -246,20 +254,23 @@ func (g *Graph) AddNode(node *Node) {
 	Assert(!ok, "Duplicate node name %v", node.Name)
 	g.nodes[node.Name] = node
 
-	// subscribe node inputs to existing edges
-	for _, inputName := range node.InputNames {
-		edge, ok := g.edges[inputName]
-		Assert(ok, "Node %v input %v not found", node.Name, inputName)
-		g.inputs[node.Name] = edge.Subscribe(g.Size)
-	}
+	/*
+		XXX don't do this here -- join() will do it
+		// subscribe node inputs to existing edges
+		for _, inputName := range node.InputNames {
+			edge, ok := g.edges[inputName]
+			Assert(ok, "Node %v input %v not found", node.Name, inputName)
+			g.nodeInputs[node.Name] = edge.Subscribe(g.Size)
+		}
+	*/
 
 	// create an edge for each node output
 	for _, name := range node.GetOutputNames() {
-		Pf("adding node %v output %v\n", node.GetName(), name)
+		Debug("creating node %v output %v\n", node.GetName(), name)
 		_, ok := g.edges[name]
 		if ok {
-			Pf("edges: %#v\n", g.edges)
-			Pf("edgeNodes: %#v\n", g.edgeNodes)
+			Debug("edges: %#v\n", g.edges)
+			Debug("edgeNodes: %#v\n", g.edgeNodes)
 			existingNode := g.edgeNodes[name]
 			Assert(false, "Node %v output %v already used by node %v", node.GetName(), name, existingNode.GetName())
 		}
@@ -278,56 +289,54 @@ func (g *Graph) Start() {
 		return
 	}
 
-	// create output channels from edges
-	for _, name := range g.OutputNames {
-		edge, ok := g.edges[name]
-		Assert(ok, "Output %v not found", name)
-		g.outputs[name] = edge.Subscribe(g.Size)
+	wg := &sync.WaitGroup{}
+	// start goroutine for each node
+	for _, node := range g.nodes {
+		wg.Add(1)
+		go func(node Function) {
+			defer wg.Done()
+			g.start(node)
+		}(node)
+	}
+	// wait for all nodes to start
+	wg.Wait()
+
+	// find all unsubscribed edges -- these are the graph outputs
+	for name, edge := range g.edges {
+		if len(edge.Subscribers) == 0 {
+			g.OutputNames = append(g.OutputNames, name)
+		}
 	}
 
-	// start goroutines for each node
-	for _, node := range g.nodes {
-		go g.start(node)
-	}
+	// join the graph outputs into a single channel
+	g.graphOutputChan = g.join(g.OutputNames)
 
 }
 
-// startNode starts a node's goroutine.
+// start starts a node's goroutine.
 func (g *Graph) start(node Function) {
-	defer func() {
-		// notify output channels on exit
-		for _, output := range node.GetOutputNames() {
-			close(g.edges[output].Publish)
-		}
-	}()
 
-	// find the node's input channels
-	inputChans := make([]chan float64, len(node.GetInputNames()))
-	for i, input := range node.GetInputNames() {
-		inputChans[i] = g.inputs[input]
-	}
-
-	// create Joiner for inputs
-	joiner := NewJoiner(node.GetName(), g.Size, inputChans)
-	// subscribe to joiner
-	inputChan := joiner.Subscribe()
+	// join the node inputs
+	inputChan := g.join(node.GetInputNames())
 
 	// read from joiner until it is closed
-	for inputs := range inputChan {
-		// create map from inputs
-		// XXX oops, we're going to all the trouble to wrap but
-		// then we're going to unwrap again here
-		inputMap := make(map[string]float64)
-		for i, input := range node.GetInputNames() {
-			inputMap[input] = inputs[i]
+	go func() {
+		defer func() {
+			// notify output channels on exit
+			for _, output := range node.GetOutputNames() {
+				close(g.edges[output].Publish)
+			}
+		}()
+		for inputMap := range inputChan {
+			// calculate result
+			Debug("node %v inputMap: %#v\n", node.GetName(), inputMap)
+			outputMap := node.F(inputMap)
+			// send result to output channels
+			for name, value := range outputMap {
+				g.edges[name].Send(value)
+			}
 		}
-		// calculate result
-		outputMap := node.F(inputMap)
-		// send result to output channels
-		for name, value := range outputMap {
-			g.edges[name].Send(value)
-		}
-	}
+	}()
 }
 
 // F executes the graph's function.
@@ -340,40 +349,35 @@ func (g *Graph) F(inputMap map[string]float64) (outputMap map[string]float64) {
 	for name, value := range inputMap {
 		edge, ok := g.edges[name]
 		Assert(ok, "Input %v not found", name)
+		Debug("graph sending %v to %v\n", value, name)
 		edge.Send(value)
 	}
-	// for each output, read the value from the edge of the same name
-	outputMap = make(map[string]float64)
-	for name, output := range g.outputs {
-		outputMap[name] = <-output
-	}
+	Debug("sent inputs\n")
+
+	// get the results from graph output joiner
+	outputMap = <-g.graphOutputChan
 	return
 }
 
-// Joiner takes several input topics and publishes a single output
-// slice.  The output slice is published each time all input topics
-// have received a value.
-type Joiner struct {
-	Name        string
-	InputChans  []chan float64
-	Subscribers []chan []float64
-	size        int
-}
+// join() given a list of edge names, subscribes to each edge and
+// returns a channel which will contain a map of values published to
+// the edges.
+func (g *Graph) join(names []string) (outChan chan map[string]float64) {
 
-// NewJoiner creates a new joiner with the given input topics.
-func NewJoiner(name string, size int, inputChans []chan float64) (a *Joiner) {
-	a = &Joiner{
-		Name:        name,
-		InputChans:  inputChans,
-		Subscribers: make([]chan []float64, 0),
+	inputChans := make(map[string]chan float64)
+
+	// create channels by subscribing to each edge
+	for _, name := range names {
+		inputChans[name] = g.edges[name].Subscribe(g.Size)
 	}
+
+	// create outChan
+	outChan = make(chan map[string]float64, g.Size)
 
 	go func() {
 		defer func() {
-			// notify subscribers on exit
-			for _, subscriber := range a.Subscribers {
-				close(subscriber)
-			}
+			// notify output channel on exit
+			close(outChan)
 		}()
 
 		// read from all input channels until they are closed
@@ -382,44 +386,37 @@ func NewJoiner(name string, size int, inputChans []chan float64) (a *Joiner) {
 			// read from all input channels. we need to read from each
 			// in a separate goroutine to avoid blocking and to handle
 			// the case where one or more channels are closed.
-			values := make([]float64, len(inputChans))
+			values := make(map[string]float64)
 			wg := &sync.WaitGroup{}
-			for i := range inputChans {
+			for name, c := range inputChans {
 				wg.Add(1)
-				// start goroutine for topic i
-				go func(i int) {
+				// start goroutine for input channel
+				go func(name string, c chan float64) {
 					defer wg.Done()
-					// read one value from topic i
-					input, ok := <-inputChans[i]
+					// read one value from channel
+					Debug("joiner waiting for %v addr %v\n", name, &c)
+					input, ok := <-c
 					if ok {
 						// channel is open
-						values[i] = input
+						values[name] = input
+						Debug("joiner got %v, values: %#v\n", name, values)
 						return
 					}
 					// channel is closed
 					closedCount++
-				}(i)
+				}(name, c)
 			}
 			// wait for all input channels to be read
 			wg.Wait()
 			if closedCount == len(inputChans) {
 				return
 			}
+			Debug("joiner values: %#v\n", values)
 
-			// send the values slice to all subscribers
-			for _, subscriber := range a.Subscribers {
-				subscriber <- values
-			}
+			// send the values map to output channel
+			outChan <- values
 		}
 	}()
-	return
-}
-
-// Subscribe returns a channel which will receive each slice of values
-// published by the joiner.
-func (a *Joiner) Subscribe() (c chan []float64) {
-	c = make(chan []float64, a.size)
-	a.Subscribers = append(a.Subscribers, c)
 	return
 }
 

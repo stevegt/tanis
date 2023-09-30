@@ -10,6 +10,38 @@ import (
 	_ "net/http/pprof"
 )
 
+func add(args ...float64) float64 {
+	var res float64
+	for _, arg := range args {
+		res += arg
+	}
+	return res
+}
+
+func sub(args ...float64) float64 {
+	var res float64
+	for _, arg := range args {
+		res -= arg
+	}
+	return res
+}
+
+func mul(args ...float64) float64 {
+	var res float64
+	for _, arg := range args {
+		res *= arg
+	}
+	return res
+}
+
+func div(args ...float64) float64 {
+	var res float64
+	for _, arg := range args {
+		res /= arg
+	}
+	return res
+}
+
 // RandomKey returns a random key from a map. In this code, `K` refers
 // to the key data type, and `V` refers to the value data type. The
 // keyword `comparable` indicates that `K` must be a comparable type,
@@ -116,66 +148,48 @@ func TestNode(t *testing.T) {
 
 }
 
-func TestJoiner(t *testing.T) {
-	inputs := []float64{0, 1.0, 2.0, 3.0, 4.0, 5.0, 6}
-	width := len(inputs)
-	// create input channels
-	inputChans := make([]chan float64, 0)
-	for i := 0; i < width; i++ {
-		inputChans = append(inputChans, make(chan float64))
-	}
-	// create a joiner
-	joiner := NewJoiner("1", 0, inputChans)
-	// subscribe to the joiner's output
-	resultChan := joiner.Subscribe()
+func TestJoin(t *testing.T) {
+	inputNames := []string{"a", "b", "c"}
+	width := len(inputNames)
 
-	// publish values to the input channel
-	for i, inputChan := range inputChans {
-		inputChan <- inputs[i]
-		close(inputChan)
+	// create an empty graph -- this should create an edge for each
+	// input name
+	g := NewGraph("joiner", 0, inputNames)
+
+	// join the inputs into a single channel
+	outChan := g.join(inputNames)
+
+	// send a value to each input
+	inputs := map[string]float64{
+		"a": 1.0,
+		"b": 2.0,
+		"c": 3.0,
+	}
+	for name, value := range inputs {
+		g.edges[name].Send(value)
 	}
 
-	// read results from the result channel
-	var result []float64
-	for result = range resultChan {
-	}
+	// read the result from the output channel
+	result := <-outChan
+
+	// check the result
 	Assert(len(result) == width, "expected %d results, got %d", width, len(result))
-	for i := 0; i < width; i++ {
-		Assert(result[i] == inputs[i], "expected result %f, got %f", inputs[i], result[i])
+	for name, value := range inputs {
+		Tassert(t, result[name] == value, "expected result %f, got %f", value, result[name])
 	}
+
+	// close the input channels
+	for _, edge := range g.edges {
+		close(edge.Publish)
+	}
+
+	// make sure output channel is closed
+	for result = range outChan {
+		Tassert(t, false, "got extra result %f", result)
+	}
+
 }
 
-func add(args ...float64) float64 {
-	var res float64
-	for _, arg := range args {
-		res += arg
-	}
-	return res
-}
-
-func sub(args ...float64) float64 {
-	var res float64
-	for _, arg := range args {
-		res -= arg
-	}
-	return res
-}
-
-func mul(args ...float64) float64 {
-	var res float64
-	for _, arg := range args {
-		res *= arg
-	}
-	return res
-}
-
-func div(args ...float64) float64 {
-	var res float64
-	for _, arg := range args {
-		res /= arg
-	}
-	return res
-}
 func TestGraph(t *testing.T) {
 
 	// see http://localhost:6060/debug/pprof/goroutine?debug=2 for deadlocks
@@ -195,17 +209,26 @@ func TestGraph(t *testing.T) {
 
 	// Build a simple network using a Graph
 	inputNames := []string{"a", "b"}
-	outputNames := []string{"y"}
-	g := NewGraph("fib", 0, inputNames, outputNames)
+	g := NewGraph("fib", 0, inputNames)
 	// - this particular graph is a fibonacci sequence
 	g.AddNode(Wrap(functions["add"], []string{"a", "b"}, "c"))
 	g.AddNode(Wrap(functions["add"], []string{"b", "c"}, "d"))
 	g.AddNode(Wrap(functions["add"], []string{"c", "d"}, "e"))
 	g.AddNode(Wrap(functions["add"], []string{"d", "e"}, "f"))
-	g.AddNode(Wrap(functions["add"], []string{"e", "f"}, "y"))
+	g.AddNode(Wrap(functions["add"], []string{"e", "f"}, "g"))
 	g.Start()
-	res := g.F(map[string]float64{"a": 0, "b": 1})
+
+	// make an input map
+	inputMap := map[string]float64{
+		"a": 0.0,
+		"b": 1.0,
+	}
+	res := g.F(inputMap)
 	Pl(res)
+
+	// make sure the result is correct
+	Assert(len(res) == 1, "expected %d result, got %d", 1, len(res))
+	Assert(res["g"] == 8.0, "expected result %f, got %f", 8.0, res["g"])
 }
 
 /*
