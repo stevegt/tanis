@@ -294,42 +294,40 @@ func (g *Graph) Start() {
 
 // startNode starts a node's goroutine.
 func (g *Graph) start(node Function) {
-	go func(node Function) {
-		defer func() {
-			// notify output channels on exit
-			for _, output := range node.GetOutputNames() {
-				close(g.edges[output].Publish)
-			}
-		}()
+	defer func() {
+		// notify output channels on exit
+		for _, output := range node.GetOutputNames() {
+			close(g.edges[output].Publish)
+		}
+	}()
 
-		// find the node's input channels
-		inputChans := make([]chan float64, len(node.GetInputNames()))
+	// find the node's input channels
+	inputChans := make([]chan float64, len(node.GetInputNames()))
+	for i, input := range node.GetInputNames() {
+		inputChans[i] = g.inputs[input]
+	}
+
+	// create Joiner for inputs
+	joiner := NewJoiner(node.GetName(), g.Size, inputChans)
+	// subscribe to joiner
+	inputChan := joiner.Subscribe()
+
+	// read from joiner until it is closed
+	for inputs := range inputChan {
+		// create map from inputs
+		// XXX oops, we're going to all the trouble to wrap but
+		// then we're going to unwrap again here
+		inputMap := make(map[string]float64)
 		for i, input := range node.GetInputNames() {
-			inputChans[i] = g.inputs[input]
+			inputMap[input] = inputs[i]
 		}
-
-		// create Joiner
-		joiner := NewJoiner(node.GetName(), g.Size, inputChans)
-		// subscribe to joiner
-		inputChan := joiner.Subscribe()
-
-		// read from joiner until it is closed
-		for inputs := range inputChan {
-			// create map from inputs
-			// XXX oops, we're going to all the trouble to wrap but
-			// then we're going to unwrap again here
-			inputMap := make(map[string]float64)
-			for i, input := range node.GetInputNames() {
-				inputMap[input] = inputs[i]
-			}
-			// calculate result
-			outputMap := node.F(inputMap)
-			// send result to output channels
-			for name, value := range outputMap {
-				g.edges[name].Send(value)
-			}
+		// calculate result
+		outputMap := node.F(inputMap)
+		// send result to output channels
+		for name, value := range outputMap {
+			g.edges[name].Send(value)
 		}
-	}(node)
+	}
 }
 
 // F executes the graph's function.
