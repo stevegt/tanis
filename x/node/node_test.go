@@ -6,6 +6,7 @@ import (
 
 	. "github.com/stevegt/goadapt"
 
+	"net/http"
 	_ "net/http/pprof"
 )
 
@@ -20,6 +21,33 @@ func RandomKey[K comparable, V any](m map[K]V) K {
 	}
 
 	return keys[rand.Intn(len(keys))]
+}
+
+func TestWrap(t *testing.T) {
+	// create a function
+	fn := func(args ...float64) float64 {
+		var sum float64
+		for _, arg := range args {
+			sum += arg
+		}
+		return sum
+	}
+
+	// create a wrapped function
+	inputNames := []string{"a", "b", "c"}
+	outputName := "y"
+	node := Wrap(fn, inputNames, outputName)
+
+	// make an input map
+	inputMap := map[string]float64{
+		"a": 1.0,
+		"b": 2.0,
+		"c": 3.0,
+	}
+
+	// call the wrapped function via the node
+	resultMap := node.F(inputMap)
+	Assert(resultMap[outputName] == 6.0, "expected result %f, got %f", 6.0, resultMap[outputName])
 }
 
 func TestEdge(t *testing.T) {
@@ -49,11 +77,143 @@ func TestEdge(t *testing.T) {
 
 }
 
+func TestNode(t *testing.T) {
+	// create a zero node
+	node := &Node{}
+	// try calling it
+	result := node.F(nil)
+	Tassert(t, result == nil, "expected result %v, got %v", nil, result)
+
+	// create a function with multiple outputs
+	fn := func(args ...float64) []float64 {
+		var sum float64
+		var product float64 = 1.0
+		for _, arg := range args {
+			sum += arg
+			product *= arg
+		}
+		return []float64{sum, product}
+	}
+
+	// create a node with multiple outputs
+	inputNames := []string{"a", "b", "c", "d"}
+	outputNames := []string{"x", "y"}
+	node = WrapMulti(fn, inputNames, outputNames)
+	// try calling it
+	inputMap := map[string]float64{
+		"a": 1.0,
+		"b": 2.0,
+		"c": 3.0,
+		"d": 4.0,
+	}
+	resultMap := node.F(inputMap)
+	Pf("resultMap: %#v\n", resultMap)
+	Tassert(t, resultMap["x"] == 10.0, "expected result %f, got %f", 10.0, resultMap["x"])
+	Tassert(t, resultMap["y"] == 24.0, "expected result %f, got %f", 24.0, resultMap["y"])
+
+	// ensure we're implementing Function
+	var _ Function = node
+
+}
+
+func TestJoiner(t *testing.T) {
+	inputs := []float64{0, 1.0, 2.0, 3.0, 4.0, 5.0, 6}
+	width := len(inputs)
+	// create input channels
+	inputChans := make([]chan float64, 0)
+	for i := 0; i < width; i++ {
+		inputChans = append(inputChans, make(chan float64))
+	}
+	// create a joiner
+	joiner := NewJoiner("1", 0, inputChans)
+	// subscribe to the joiner's output
+	resultChan := joiner.Subscribe()
+
+	// publish values to the input channel
+	for i, inputChan := range inputChans {
+		inputChan <- inputs[i]
+		close(inputChan)
+	}
+
+	// read results from the result channel
+	var result []float64
+	for result = range resultChan {
+	}
+	Assert(len(result) == width, "expected %d results, got %d", width, len(result))
+	for i := 0; i < width; i++ {
+		Assert(result[i] == inputs[i], "expected result %f, got %f", inputs[i], result[i])
+	}
+}
+
+func add(args ...float64) float64 {
+	var res float64
+	for _, arg := range args {
+		res += arg
+	}
+	return res
+}
+
+func sub(args ...float64) float64 {
+	var res float64
+	for _, arg := range args {
+		res -= arg
+	}
+	return res
+}
+
+func mul(args ...float64) float64 {
+	var res float64
+	for _, arg := range args {
+		res *= arg
+	}
+	return res
+}
+
+func div(args ...float64) float64 {
+	var res float64
+	for _, arg := range args {
+		res /= arg
+	}
+	return res
+}
+func TestGraph(t *testing.T) {
+
+	// see http://localhost:6060/debug/pprof/goroutine?debug=2 for deadlocks
+	go func() {
+		Pl(http.ListenAndServe("localhost:6060", nil))
+	}()
+
+	// Build a function table
+	functions := map[string]func(args ...float64) float64{
+		"add": add,
+		"sub": sub,
+		"mul": mul,
+		"div": div,
+		"one": func(args ...float64) float64 { return 1 },
+		"two": func(args ...float64) float64 { return 2 },
+	}
+
+	// Build a simple network using a Graph
+	inputNames := []string{"a", "b"}
+	outputNames := []string{"y"}
+	g := NewGraph("fib", 0, inputNames, outputNames)
+	// - this particular graph is a fibonacci sequence
+	g.AddNode(Wrap(functions["add"], []string{"a", "b"}, "c"))
+	g.AddNode(Wrap(functions["add"], []string{"b", "c"}, "d"))
+	g.AddNode(Wrap(functions["add"], []string{"c", "d"}, "e"))
+	g.AddNode(Wrap(functions["add"], []string{"d", "e"}, "f"))
+	g.AddNode(Wrap(functions["add"], []string{"e", "f"}, "y"))
+	g.Start()
+	res := g.F(map[string]float64{"a": 0, "b": 1})
+	Pl(res)
+}
+
 /*
 
 func TestSimple(t *testing.T) {
 	logger = NewLog()
 
+	// see localhost:6060/debug/pprof
 	go func() {
 		Pl(http.ListenAndServe("localhost:6060", nil))
 	}()
@@ -249,37 +409,6 @@ func TestGraph(t *testing.T) {
 	}
 }
 
-func add(args ...float64) float64 {
-	var res float64
-	for _, arg := range args {
-		res += arg
-	}
-	return res
-}
-
-func sub(args ...float64) float64 {
-	var res float64
-	for _, arg := range args {
-		res -= arg
-	}
-	return res
-}
-
-func mul(args ...float64) float64 {
-	var res float64
-	for _, arg := range args {
-		res *= arg
-	}
-	return res
-}
-
-func div(args ...float64) float64 {
-	var res float64
-	for _, arg := range args {
-		res /= arg
-	}
-	return res
-}
 
 func TestNet(t *testing.T) {
 	rand.Seed(1)
