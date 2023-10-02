@@ -55,6 +55,16 @@ func (n *Node) GetOutputNames() []string {
 	return n.OutputNames
 }
 
+func isNil(f Function) bool {
+	if f == nil {
+		return true
+	}
+	if f.(*Node) == nil {
+		return true
+	}
+	return false
+}
+
 // Wrap creates a new Node, accepting a function that accepts a
 // variadic list of float64 values along with a slice of input names
 // and an output name.
@@ -64,6 +74,7 @@ func Wrap(fslices func(...float64) float64, inputNames []string, outputName stri
 		// convert input map to slice
 		inputs := make([]float64, len(inputNames))
 		for i, inputName := range inputNames {
+			Assert(inputName != "", "Empty input name")
 			var ok bool
 			inputs[i], ok = inputMap[inputName]
 			Assert(ok, "input %v missing from provided map", inputName)
@@ -137,6 +148,10 @@ type Edge struct {
 	// Subscribers is a slice of channels which will receive values
 	// sent to the edge.
 	Subscribers []chan float64
+	// FromNode is the node that the edge gets its values from.
+	FromNode Function
+	// ToNodes is a slice of subscriber nodes.
+	ToNodes []Function
 }
 
 // NewEdge creates a new edge with the given name and size.  Size is
@@ -145,12 +160,17 @@ type Edge struct {
 // all subscribers have received the previously published value,
 // which can be useful when needed for barrier problem
 // synchronization.
-func NewEdge(name string, size int) (e *Edge) {
+func NewEdge(name string, fromNode *Node, size int) (e *Edge) {
+	if name == "" {
+		name = uname()
+	}
 	e = &Edge{
 		Name:        name,
+		FromNode:    fromNode,
 		Publish:     make(chan float64, size),
 		Subscribers: make([]chan float64, 0),
 	}
+	Debug("NewEdge %s\n", name)
 	go func() {
 		defer func() {
 			// notify subscribers on exit
@@ -182,10 +202,11 @@ func NewEdge(name string, size int) (e *Edge) {
 // channel is unbuffered.  An unbuffered channel can be used to block
 // other subscribers until this subscriber has received the value;
 // this might be useful if needed for barrier problem synchronization.
-func (e *Edge) Subscribe(size int) (c chan float64) {
+func (e *Edge) Subscribe(toNode Function, size int) (c chan float64) {
 	c = make(chan float64, size)
-	Debug("edge %s subscribe creating chan addr %v\n", e.Name, &c)
+	// Debug("edge %s subscribe creating chan addr %v\n", e.Name, &c)
 	e.Subscribers = append(e.Subscribers, c)
+	e.ToNodes = append(e.ToNodes, toNode)
 	return
 }
 
@@ -238,7 +259,7 @@ func NewGraph(name string, size int, inputNames []string) (g *Graph) {
 
 	// create an edge for each graph input
 	for _, name := range g.InputNames {
-		g.edges[name] = NewEdge(name, size)
+		g.edges[name] = NewEdge(name, nil, size)
 	}
 
 	return
@@ -254,16 +275,6 @@ func (g *Graph) AddNode(node *Node) {
 	Assert(!ok, "Duplicate node name %v", node.Name)
 	g.nodes[node.Name] = node
 
-	/*
-		XXX don't do this here -- join() will do it
-		// subscribe node inputs to existing edges
-		for _, inputName := range node.InputNames {
-			edge, ok := g.edges[inputName]
-			Assert(ok, "Node %v input %v not found", node.Name, inputName)
-			g.nodeInputs[node.Name] = edge.Subscribe(g.Size)
-		}
-	*/
-
 	// create an edge for each node output
 	for _, name := range node.GetOutputNames() {
 		Debug("creating node %v output %v\n", node.GetName(), name)
@@ -274,7 +285,7 @@ func (g *Graph) AddNode(node *Node) {
 			existingNode := g.edgeNodes[name]
 			Assert(false, "Node %v output %v already used by node %v", node.GetName(), name, existingNode.GetName())
 		}
-		g.edges[name] = NewEdge(name, g.Size)
+		g.edges[name] = NewEdge(name, node, g.Size)
 		g.edgeNodes[name] = node
 	}
 
@@ -309,7 +320,7 @@ func (g *Graph) Start() {
 	}
 
 	// join the graph outputs into a single channel
-	g.graphOutputChan = g.join(g.OutputNames)
+	g.graphOutputChan = g.join(nil, g.OutputNames)
 
 }
 
@@ -317,7 +328,7 @@ func (g *Graph) Start() {
 func (g *Graph) start(node Function) {
 
 	// join the node inputs
-	inputChan := g.join(node.GetInputNames())
+	inputChan := g.join(node, node.GetInputNames())
 
 	// read from joiner until it is closed
 	go func() {
@@ -362,13 +373,20 @@ func (g *Graph) F(inputMap map[string]float64) (outputMap map[string]float64) {
 // join() given a list of edge names, subscribes to each edge and
 // returns a channel which will contain a map of values published to
 // the edges.
-func (g *Graph) join(names []string) (outChan chan map[string]float64) {
+func (g *Graph) join(toNode Function, names []string) (outChan chan map[string]float64) {
 
 	inputChans := make(map[string]chan float64)
 
 	// create channels by subscribing to each edge
 	for _, name := range names {
-		inputChans[name] = g.edges[name].Subscribe(g.Size)
+		Assert(name != "", "Empty edge name")
+		var ok bool
+		edge, ok := g.edges[name]
+		Assert(ok, "Edge %v not found", name)
+		// prevent duplicate subscriptions
+		_, ok = inputChans[name]
+		Assert(!ok, "Edge %v already subscribed", name)
+		inputChans[name] = edge.Subscribe(toNode, g.Size)
 	}
 
 	// create outChan
@@ -380,43 +398,104 @@ func (g *Graph) join(names []string) (outChan chan map[string]float64) {
 			close(outChan)
 		}()
 
-		// read from all input channels until they are closed
-		closedCount := 0
-		for {
-			// read from all input channels. we need to read from each
-			// in a separate goroutine to avoid blocking and to handle
-			// the case where one or more channels are closed.
-			values := make(map[string]float64)
-			wg := &sync.WaitGroup{}
-			for name, c := range inputChans {
-				wg.Add(1)
-				// start goroutine for input channel
-				go func(name string, c chan float64) {
-					defer wg.Done()
+		// read from all input channels. we need to read from each
+		// in a separate goroutine to avoid blocking and to handle
+		// the case where one or more channels are closed.  we start a
+		// goroutine for each input channel, and then we read values
+		// from each channel, waiting until we have one value from
+		// each channel while filling the output map, then we publish
+		// the output map on outchan.
+
+		// create intermediate rx channels to store the most recent
+		// value from each input channel.
+		rxChans := make(map[string]chan float64)
+		for name, _ := range inputChans {
+			rxChans[name] = make(chan float64, 1)
+		}
+
+		// start a goroutine for each input channel.  each goroutine
+		// reads one value from its channel and stores it in the
+		// rx channel
+		for name, c := range inputChans {
+			go func(name string, c chan float64) {
+				for {
 					// read one value from channel
 					Debug("joiner waiting for %v addr %v\n", name, &c)
+					// wait until the parent goroutine says it's ok to read
 					input, ok := <-c
-					if ok {
-						// channel is open
-						values[name] = input
-						Debug("joiner got %v, values: %#v\n", name, values)
+					if !ok {
+						// channel is closed
+						Debug("joiner got closed %v\n", name)
+						close(rxChans[name])
 						return
 					}
-					// channel is closed
-					closedCount++
-				}(name, c)
-			}
-			// wait for all input channels to be read
-			wg.Wait()
-			if closedCount == len(inputChans) {
-				return
-			}
-			Debug("joiner values: %#v\n", values)
-
-			// send the values map to output channel
-			outChan <- values
+					// channel is open
+					rxChans[name] <- input
+					Debug("joiner got %v, input: %#v\n", name, input)
+				}
+			}(name, c)
 		}
+
+		// read from rx channels until they are closed
+		closed := false
+		for {
+			outputMap := make(map[string]float64)
+			// read one value from each input channel
+			for name, c := range rxChans {
+				// get one value from channel
+				input, ok := <-c
+				if !ok {
+					// channel is closed
+					closed = true
+					break
+				}
+				// channel is open
+				outputMap[name] = input
+			}
+			if closed {
+				// one or more channels are closed
+				break
+			}
+			outChan <- outputMap
+		}
+
 	}()
+	return
+}
+
+// Draw analyzes the graph and returns a graphviz graph.
+// XXX move all this stuff into NewGraph and AddNode, create actual
+// edges during Start()
+func (g *Graph) Draw() (dot string) {
+	// start graph
+	dot = Spf("digraph %s {\n", g.Name)
+	// add nodes
+	for _, node := range g.nodes {
+		dot += Spf("  %s;\n", node.GetName())
+	}
+	// add edges
+	for _, edge := range g.edges {
+		var fromName string
+		if isNil(edge.FromNode) {
+			// edge is a graph input
+			fromName = "in"
+		} else {
+			Pf("edge %#v fromNode %#v\n", edge, edge.FromNode)
+			fromName = edge.FromNode.GetName()
+		}
+		for _, toNode := range edge.ToNodes {
+			var toName string
+			if isNil(toNode) {
+				// edge is a graph output
+				toName = "out"
+			} else {
+				toName = toNode.GetName()
+			}
+			dot += Spf("  %s -> %s [label=\"%s\"];\n", fromName, toName, edge.Name)
+		}
+	}
+	// end graph
+	dot += "}\n"
 	return
 }
 

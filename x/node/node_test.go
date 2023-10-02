@@ -1,6 +1,8 @@
 package node
 
 import (
+	"fmt"
+	"io/ioutil"
 	"math/rand"
 	"testing"
 
@@ -47,12 +49,22 @@ func div(args ...float64) float64 {
 // keyword `comparable` indicates that `K` must be a comparable type,
 // while V can be any type.
 func RandomKey[K comparable, V any](m map[K]V) K {
+	Assert(len(m) > 0, "expected map to be non-empty")
 	var keys []K
 	for k := range m {
 		keys = append(keys, k)
 	}
+	key := keys[rand.Intn(len(keys))]
+	return key
+}
 
-	return keys[rand.Intn(len(keys))]
+// saveDot saves a graphviz dot file to /tmp
+func saveDot(g *Graph) {
+	name := g.Name
+	dot := g.Draw()
+	err := ioutil.WriteFile(fmt.Sprintf("/tmp/%s.dot", name), []byte(dot), 0644)
+	Ck(err)
+	Pf("saved /tmp/%s.dot\n", name)
 }
 
 func TestWrap(t *testing.T) {
@@ -84,11 +96,11 @@ func TestWrap(t *testing.T) {
 
 func TestEdge(t *testing.T) {
 	// create an edge
-	edge := NewEdge("a", 0)
+	edge := NewEdge("a", nil, 0)
 
 	// subscribe to the edge
-	rc1 := edge.Subscribe(0)
-	rc2 := edge.Subscribe(0)
+	rc1 := edge.Subscribe(nil, 0)
+	rc2 := edge.Subscribe(nil, 0)
 
 	// publish a value to the edge
 	edge.Send(1.0)
@@ -157,7 +169,7 @@ func TestJoin(t *testing.T) {
 	g := NewGraph("joiner", 0, inputNames)
 
 	// join the inputs into a single channel
-	outChan := g.join(inputNames)
+	outChan := g.join(nil, inputNames)
 
 	// send a value to each input
 	inputs := map[string]float64{
@@ -192,10 +204,12 @@ func TestJoin(t *testing.T) {
 
 func TestGraph(t *testing.T) {
 
-	// see http://localhost:6060/debug/pprof/goroutine?debug=2 for deadlocks
-	go func() {
-		Pl(http.ListenAndServe("localhost:6060", nil))
-	}()
+	/*
+		// see http://localhost:6060/debug/pprof/goroutine?debug=2 for deadlocks
+		go func() {
+			Pl(http.ListenAndServe("localhost:6060", nil))
+		}()
+	*/
 
 	// Build a function table
 	functions := map[string]func(args ...float64) float64{
@@ -229,6 +243,85 @@ func TestGraph(t *testing.T) {
 	// make sure the result is correct
 	Assert(len(res) == 1, "expected %d result, got %d", 1, len(res))
 	Assert(res["g"] == 8.0, "expected result %f, got %f", 8.0, res["g"])
+
+	// save the graph
+	saveDot(g)
+}
+
+func TestRandomGraph(t *testing.T) {
+
+	// see http://localhost:6060/debug/pprof/goroutine?debug=2 for deadlocks
+	go func() {
+		Pl(http.ListenAndServe("localhost:6060", nil))
+	}()
+
+	rand.Seed(1)
+	// Build a function table
+	functions := map[string]func(args ...float64) float64{
+		"add": add,
+		"sub": sub,
+		"mul": mul,
+		"div": div,
+		"one": func(args ...float64) float64 { return 1 },
+		"two": func(args ...float64) float64 { return 2 },
+	}
+
+	// Build a small random network using a Graph
+	inputNames := []string{"a", "b", "c"}
+	g := NewGraph("randomGraph", 0, inputNames)
+	// create a bunch of nodes
+	for i := 0; i < 2; i++ {
+		// pick a random function
+		fn := functions[RandomKey(functions)]
+
+		// pick one or more random edges from the existing edges to use
+		// as inputs
+		upstreams := make(map[string]bool)
+		for {
+			if rand.Float64() < 0.7 {
+				name := RandomKey(g.edges)
+				Assert(name != "", "expected name to be non-empty")
+				// prevent duplicate upstreams
+				_, ok := upstreams[name]
+				if ok {
+					continue
+				}
+				upstreams[name] = true
+			} else {
+				// ensure we have at least one upstream
+				if len(upstreams) > 1 {
+					break
+				}
+			}
+		}
+
+		// add the node
+		upstreamNames := make([]string, len(upstreams))
+		for name, _ := range upstreams {
+			upstreamNames = append(upstreamNames, name)
+		}
+		g.AddNode(Wrap(fn, upstreamNames, uname()))
+	}
+
+	// start the graph
+	g.Start()
+
+	// make an input map
+	inputMap := map[string]float64{
+		"a": 0.0,
+		"b": 1.0,
+		"c": 2.0,
+	}
+
+	saveDot(g)
+
+	// run the graph
+	res := g.F(inputMap)
+	Pl(res)
+
+	// dot := g.DrawDot()
+	// ioutil.WriteFile("/tmp/node_test.dot", []byte(dot), 0644)
+
 }
 
 /*
@@ -433,78 +526,4 @@ func TestGraph(t *testing.T) {
 }
 
 
-func TestNet(t *testing.T) {
-	rand.Seed(1)
-
-	// Build a function table
-	functions := map[string]Function{
-		"add": Function{add},
-		"sub": Function{sub},
-		"mul": Function{mul},
-		"div": Function{div},
-		"one": Function{func(args ...float64) float64 { return 1 }},
-		"two": Function{func(args ...float64) float64 { return 2 }},
-	}
-
-	// Build a small random network using a Graph
-	g := NewGraph(0)
-	inputTopics := g.NameInputs("a", "b", "c")
-	for i := 0; i < 20; i++ {
-		OldNode
-		// pick a random function
-		fn := functions[RandomKey(functions)]
-		// pick random inputs for node
-		inputs := make([]Publisher, 0)
-
-		// maybe pick a random input topic
-		if rand.Float64() < 0.1 {
-			inputs = append(inputs, inputTopics[RandomKey(inputTopics)])
-		}
-
-		// pick zero or more random nodes from the existing nodes to use
-		// as inputs
-		for {
-			if rand.Float64() < 0.7 && len(g.Nodes) > 0 {
-				j := rand.Intn(len(g.Nodes))
-				inOldNode = append(inputs, g.Nodes[j])
-			} else {
-				break
-			}
-		}
-
-		// add the node
-		g.AddNode(uint64(i), fn, inputs...)
-	}
-	Pf("open outputs: %d\n", len(g.OpenOutputs()))
-	// assign names to all of the open outputs
-	var names []string
-	for i := 0; i < len(g.OpenOutputs()); i++ {
-		name := fmt.Sprintf("y%d", i)
-		names = append(names, name)
-	}
-	outputTopics := g.NameOutputs(names...)
-
-	// subscribe to all of the output topics
-	var resultChans []chan float64
-	for _, outputTopic := range outputTopics {
-		resultChans = append(resultChans, outputTopic.Subscribe(0))
-	}
-	Assert(len(g.OpenOutputs()) == 0, "expected 0 open outputs, got %d", g.OpenOutputs)
-
-	// publish values to the input topics
-	for _, inputTopic := range inputTopics {
-		inputTopic.Publish <- rand.Float64()
-	}
-
-	// read results from the result channels
-	var results []float64
-	for _, resultChan := range resultChans {
-		results = append(results, <-resultChan)
-	}
-	Pl(results)
-
-	dot := g.DrawDot()
-	ioutil.WriteFile("/tmp/node_test.dot", []byte(dot), 0644)
-
-}
 */
