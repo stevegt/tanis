@@ -278,9 +278,9 @@ func TestRandomGraph(t *testing.T) {
 		// as inputs
 		upstreams := make(map[string]bool)
 		for {
-			if rand.Float64() < 0.7 {
+			if rand.Float64() < 0.3 {
 				name := RandomKey(g.edges)
-				Assert(name != "", "expected name to be non-empty")
+				Tassert(t, name != "", "expected name to be non-empty")
 				// prevent duplicate upstreams
 				_, ok := upstreams[name]
 				if ok {
@@ -296,7 +296,7 @@ func TestRandomGraph(t *testing.T) {
 		}
 
 		// add the node
-		upstreamNames := make([]string, len(upstreams))
+		var upstreamNames []string
 		for name, _ := range upstreams {
 			upstreamNames = append(upstreamNames, name)
 		}

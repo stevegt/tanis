@@ -1,8 +1,6 @@
 package node
 
 import (
-	"sync"
-
 	. "github.com/stevegt/goadapt"
 
 	_ "net/http/pprof"
@@ -26,6 +24,7 @@ type Function interface {
 	F(inputMap map[string]float64) (outputMap map[string]float64)
 	GetInputNames() []string
 	GetOutputNames() []string
+	Draw() string
 }
 
 // Node is a node in a dataflow graph.  It implements the Function
@@ -68,6 +67,11 @@ func isNil(f Function) bool {
 // Wrap creates a new Node, accepting a function that accepts a
 // variadic list of float64 values along with a slice of input names
 // and an output name.
+// XXX this isn't great, because fmaps is going to be called
+// every time the node is executed, and it's going to do a lot of
+// work to convert between maps and slices.  it would be better
+// to have functions always accept and return maps and not use
+// Wrap() at all.
 func Wrap(fslices func(...float64) float64, inputNames []string, outputName string) (n *Node) {
 	fmaps := func(inputMap map[string]float64) (outputMap map[string]float64) {
 		Assert(len(inputMap) == len(inputNames), "expected %v inputs, got %v", len(inputNames), len(inputMap))
@@ -122,6 +126,12 @@ func WrapMulti(fslices func(...float64) []float64, inputNames, outputNames []str
 		InputNames:  inputNames,
 		OutputNames: outputNames,
 	}
+	return
+}
+
+// Draw returns a graphviz entry for the node.
+func (n *Node) Draw() (dot string) {
+	dot += Spf("  %s;\n", n.GetName())
 	return
 }
 
@@ -210,6 +220,26 @@ func (e *Edge) Subscribe(toNode Function, size int) (c chan float64) {
 	return
 }
 
+// Draw returns a graphviz representation of the edge
+func (e *Edge) Draw() (dot string) {
+	var fromName string
+	if isNil(e.FromNode) {
+		fromName = "in"
+	} else {
+		fromName = e.FromNode.GetName()
+	}
+	for _, node := range e.ToNodes {
+		var toName string
+		if isNil(node) {
+			toName = "out"
+		} else {
+			toName = node.GetName()
+		}
+		dot += Spf("  %s -> %s [label=%s];\n", fromName, toName, e.Name)
+	}
+	return
+}
+
 // Send sends a value to the edge.
 func (e *Edge) Send(value float64) {
 	Debug("edge sending %v to %v\n", value, e.Name)
@@ -225,18 +255,12 @@ type Graph struct {
 	Size        int
 	InputNames  []string
 	OutputNames []string
+	// dot is a graphviz graph
+	Dot string
 	// nodes is a map of all node names to nodes
 	nodes map[string]Function
 	// edges is a map of all edge names to edges
 	edges map[string]*Edge
-	// edgeNodes is a map of all edge names to nodes
-	edgeNodes map[string]Function
-	// nodeInputs is a map of all node names to channels that are
-	// subscribed to the edge of the same name
-	// nodeInputs map[string]chan float64
-	// nodeOutputs is a map of all edge names to channels that are
-	// subscribed to the edge of the same name
-	// nodeOutputs map[string]chan float64
 	// graphOutputChan is a channel created by join(), and contains
 	// the final output map created by the graph
 	graphOutputChan chan map[string]float64
@@ -252,9 +276,6 @@ func NewGraph(name string, size int, inputNames []string) (g *Graph) {
 		OutputNames: make([]string, 0),
 		nodes:       make(map[string]Function),
 		edges:       make(map[string]*Edge),
-		edgeNodes:   make(map[string]Function),
-		// nodeInputs:  make(map[string]chan float64),
-		// nodeOutputs: make(map[string]chan float64),
 	}
 
 	// create an edge for each graph input
@@ -278,15 +299,13 @@ func (g *Graph) AddNode(node *Node) {
 	// create an edge for each node output
 	for _, name := range node.GetOutputNames() {
 		Debug("creating node %v output %v\n", node.GetName(), name)
-		_, ok := g.edges[name]
+		edge, ok := g.edges[name]
 		if ok {
 			Debug("edges: %#v\n", g.edges)
-			Debug("edgeNodes: %#v\n", g.edgeNodes)
-			existingNode := g.edgeNodes[name]
+			existingNode := edge.FromNode
 			Assert(false, "Node %v output %v already used by node %v", node.GetName(), name, existingNode.GetName())
 		}
 		g.edges[name] = NewEdge(name, node, g.Size)
-		g.edgeNodes[name] = node
 	}
 
 	return
@@ -300,17 +319,14 @@ func (g *Graph) Start() {
 		return
 	}
 
-	wg := &sync.WaitGroup{}
+	// start graph
+	g.Dot = Spf("digraph %s {\n", g.Name)
+
 	// start goroutine for each node
 	for _, node := range g.nodes {
-		wg.Add(1)
-		go func(node Function) {
-			defer wg.Done()
-			g.start(node)
-		}(node)
+		g.Dot += node.Draw()
+		g.start(node)
 	}
-	// wait for all nodes to start
-	wg.Wait()
 
 	// find all unsubscribed edges -- these are the graph outputs
 	for name, edge := range g.edges {
@@ -321,6 +337,14 @@ func (g *Graph) Start() {
 
 	// join the graph outputs into a single channel
 	g.graphOutputChan = g.join(nil, g.OutputNames)
+
+	// render all edges
+	for _, edge := range g.edges {
+		g.Dot += edge.Draw()
+	}
+
+	// end graph
+	g.Dot += "}\n"
 
 }
 
