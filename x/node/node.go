@@ -504,7 +504,6 @@ func (g *Graph) Draw() (dot string) {
 			// edge is a graph input
 			fromName = "in"
 		} else {
-			Pf("edge %#v fromNode %#v\n", edge, edge.FromNode)
 			fromName = edge.FromNode.GetName()
 		}
 		for _, toNode := range edge.ToNodes {
@@ -1152,4 +1151,17 @@ func uname() string {
 // int2str returns a string representation of an int
 func int2str(i int) string {
 	return Spf("%d", i)
+}
+
+// Stop stops the graph.
+func (g *Graph) Stop() {
+	if g == nil {
+		// no graph
+		return
+	}
+	// close all graph input channels
+	for _, name := range g.InputNames {
+		edge := g.edges[name]
+		close(edge.Publish)
+	}
 }

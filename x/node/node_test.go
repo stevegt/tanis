@@ -270,7 +270,7 @@ func TestRandomGraph(t *testing.T) {
 	inputNames := []string{"a", "b", "c"}
 	g := NewGraph("randomGraph", 0, inputNames)
 	// create a bunch of nodes
-	for i := 0; i < 2; i++ {
+	for i := 0; i < 100; i++ {
 		// pick a random function
 		fn := functions[RandomKey(functions)]
 
@@ -319,8 +319,8 @@ func TestRandomGraph(t *testing.T) {
 	res := g.F(inputMap)
 	Pl(res)
 
-	// dot := g.DrawDot()
-	// ioutil.WriteFile("/tmp/node_test.dot", []byte(dot), 0644)
+	// shut down
+	g.Stop()
 
 }
 
