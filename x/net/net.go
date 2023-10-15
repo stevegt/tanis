@@ -36,19 +36,38 @@ func RandNet(buf []byte) (net *Net) {
 // Instruction is a single instruction that is a step in constructing
 // a Net.
 type Instruction struct {
-	OpCode byte
+	OpCode int
 	Size   int
-	Args   []int64
+	Args   []uint64
 }
+
+type Opcode int
+
+const (
+	// AddNode adds a node to the net.
+	OpAddNode Opcode = iota
+	// AddConst adds a constant node to the net.
+	OpAddConst
+	// OpLast must be the last opcode.
+	OpLast
+)
 
 // RandInstruction given a slice of random bytes returns an instruction
 // along with the number of bytes consumed.
-// func RandInstruction(randBytes []byte) (inst Instruction, read int) {
+func RandInstruction(randBytes []byte) (inst Instruction, read int) {
+	ints, read := RandInts(randBytes)
+	inst.OpCode = int(UintMod(ints[0], uint64(OpLast)))
+	inst.Size = int(UintMod(ints[1], uint64(256)))
+	inst.Args = make([]uint64, inst.Size)
+	for i := 2; i < inst.Size; i++ {
+		inst.Args[i] = uint64(ints[i])
+	}
+	return
+}
 
-// RandFloats given a slice of random bytes returns a slice of random
-// float64 values along with the number of bytes consumed.
-func RandFloats(randBytes []byte) (floats []float64, read int) {
-
+// RandInts given a slice of random bytes returns a slice of random
+// uint64 values along with the number of bytes consumed.
+func RandInts(randBytes []byte) (uints []uint64, read int) {
 	// marker is a single byte that indicates the start of an
 	// instruction
 	marker := byte(0)
@@ -82,21 +101,6 @@ func RandFloats(randBytes []byte) (floats []float64, read int) {
 			continue
 		}
 
-		/*
-			// try to read varint
-			word, n := binary.Uvarint(wbuf.Bytes())
-			if n == 0 {
-				// need more bytes
-				continue
-			}
-			if n < 0 {
-				// overflow; discard first byte from buffer
-				// ignore invalid varints
-				wbuf.ReadByte()
-				continue
-			}
-		*/
-
 		if wbuf.Len() < 8 {
 			// need more bytes
 			continue
@@ -104,14 +108,12 @@ func RandFloats(randBytes []byte) (floats []float64, read int) {
 
 		// got a word
 		word := binary.BigEndian.Uint64(wbuf.Bytes())
-		// convert to float64
-		float := math.Float64frombits(word)
+		uints = append(uints, word)
 
-		floats = append(floats, float)
 		// drop word from buffer
 		wbuf.Truncate(0)
 
-		if len(floats) < int(size) {
+		if len(uints) < int(size) {
 			// need more words
 			continue
 		}
@@ -120,5 +122,24 @@ func RandFloats(randBytes []byte) (floats []float64, read int) {
 		break
 	}
 
+	return
+}
+
+// RandFloats given a slice of random bytes returns a slice of random
+// float64 values along with the number of bytes consumed.
+func RandFloats(randBytes []byte) (floats []float64, read int) {
+	// get uints
+	uints, read := RandInts(randBytes)
+	for _, word := range uints {
+		// convert to float64
+		float := math.Float64frombits(word)
+		floats = append(floats, float)
+	}
+	return
+}
+
+// UintMod returns the modulus of two uint64 values.
+func UintMod(a, b uint64) (mod uint64) {
+	mod = a % b
 	return
 }
