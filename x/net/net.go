@@ -6,10 +6,9 @@ import (
 	"math"
 	"math/rand"
 
+	. "github.com/stevegt/goadapt"
 	"github.com/stevegt/tanis/x/node"
 )
-
-// . "github.com/stevegt/goadapt"
 
 // Net is a layerless neural network that supports genetic
 // algorithm-based training.
@@ -36,8 +35,8 @@ func RandNet(buf []byte) (net *Net) {
 // Instruction is a single instruction that is a step in constructing
 // a Net.
 type Instruction struct {
-	OpCode int
-	Size   int
+	OpCode uint64
+	Size   uint64
 	Args   []uint64
 }
 
@@ -55,19 +54,23 @@ const (
 // RandInstruction given a slice of random bytes returns an instruction
 // along with the number of bytes consumed.
 func RandInstruction(randBytes []byte) (inst Instruction, read int) {
-	ints, read := RandInts(randBytes)
-	inst.OpCode = int(UintMod(ints[0], uint64(OpLast)))
-	inst.Size = int(UintMod(ints[1], uint64(256)))
-	inst.Args = make([]uint64, inst.Size)
-	for i := 2; i < inst.Size; i++ {
+	ints, read := BytesToInstBuf(randBytes)
+	Assert(len(ints) >= 2, "not enough ints")
+	inst.OpCode = AbsUintMod(ints[0], uint64(OpLast))
+	inst.Size = AbsUintMod(ints[1], 256)
+	stop := int(math.Min(float64(inst.Size), float64(len(ints))))
+	Pl("stop", stop)
+	inst.Args = make([]uint64, stop)
+	for i := 2; i < stop; i++ {
 		inst.Args[i] = uint64(ints[i])
 	}
 	return
 }
 
-// RandInts given a slice of random bytes returns a slice of random
-// uint64 values along with the number of bytes consumed.
-func RandInts(randBytes []byte) (uints []uint64, read int) {
+// BytesToInstBuf given a slice of random bytes returns a slice of
+// random uint64 values containing an instruction buffer, along with
+// the number of bytes consumed.
+func BytesToInstBuf(randBytes []byte) (uints []uint64, read int) {
 	// marker is a single byte that indicates the start of an
 	// instruction
 	marker := byte(0)
@@ -129,7 +132,7 @@ func RandInts(randBytes []byte) (uints []uint64, read int) {
 // float64 values along with the number of bytes consumed.
 func RandFloats(randBytes []byte) (floats []float64, read int) {
 	// get uints
-	uints, read := RandInts(randBytes)
+	uints, read := BytesToInstBuf(randBytes)
 	for _, word := range uints {
 		// convert to float64
 		float := math.Float64frombits(word)
@@ -138,8 +141,8 @@ func RandFloats(randBytes []byte) (floats []float64, read int) {
 	return
 }
 
-// UintMod returns the modulus of two uint64 values.
-func UintMod(a, b uint64) (mod uint64) {
-	mod = a % b
-	return
+// AbsUintMod returns the absolute value of the modulus of two uint64
+// values.
+func AbsUintMod(a, b uint64) uint64 {
+	return uint64(math.Abs(float64(a % b)))
 }
