@@ -6,7 +6,7 @@ import (
 	"math"
 	"math/rand"
 
-	. "github.com/stevegt/goadapt"
+	// . "github.com/stevegt/goadapt"
 	"github.com/stevegt/tanis/x/node"
 )
 
@@ -26,18 +26,20 @@ func Randbytes(n int) (buf []byte) {
 	return
 }
 
-// RandNet given a slice of random bytes, returns a random but valid Net.
-func RandNet(buf []byte) (net *Net) {
-	return
+// NetFromBytes given a slice of arbitrary bytes returns a valid Net.
+func NetFromBytes(buf []byte) (net *Net) {
+	net = new(Net)
+	// XXX see node_test.go
 
+	return
 }
 
 // Instruction is a single instruction that is a step in constructing
 // a Net.
 type Instruction struct {
-	OpCode uint64
-	Size   uint64
-	Args   []uint64
+	OpCode uint8
+	Argc   uint16 // number of args
+	Argv   []uint64
 }
 
 type Opcode int
@@ -51,10 +53,10 @@ const (
 	OpLast
 )
 
-// RandInstruction given a slice of random bytes returns an instruction
-// along with the number of bytes consumed.
+/*
+// RandInstruction given a slice of random bytes returns an
 func RandInstruction(randBytes []byte) (inst Instruction, read int) {
-	ints, read := BytesToInstBuf(randBytes)
+	ints, read := FindInstruction(randBytes)
 	Assert(len(ints) >= 2, "not enough ints")
 	inst.OpCode = AbsUintMod(ints[0], uint64(OpLast))
 	inst.Size = AbsUintMod(ints[1], 256)
@@ -66,11 +68,48 @@ func RandInstruction(randBytes []byte) (inst Instruction, read int) {
 	}
 	return
 }
+*/
 
-// BytesToInstBuf given a slice of random bytes returns a slice of
-// random uint64 values containing an instruction buffer, along with
-// the number of bytes consumed.
-func BytesToInstBuf(randBytes []byte) (uints []uint64, read int) {
+// Bytes returns a slice of bytes that represents the Instruction.
+func (inst *Instruction) Bytes() (buf []byte) {
+	// marker is a single byte that indicates the start of an
+	// instruction
+	marker := byte(0)
+
+	// opcode is a single byte
+	opcode := inst.OpCode
+
+	// argc is two bytes
+	argc := inst.Argc
+
+	// argv is a slice of uint64s
+	argv := inst.Argv
+
+	// buffer for bytes
+	var wbuf bytes.Buffer
+
+	// write marker
+	wbuf.WriteByte(marker)
+
+	// write opcode
+	wbuf.WriteByte(opcode)
+
+	// write argc
+	binary.Write(&wbuf, binary.BigEndian, argc)
+
+	// write argv
+	for _, word := range argv {
+		binary.Write(&wbuf, binary.BigEndian, word)
+	}
+
+	// return bytes
+	buf = wbuf.Bytes()
+	return
+}
+
+// FindInstruction given a slice of bytes finds and returns an
+// Instruction along with the number of bytes consumed.
+func FindInstruction(buf []byte) (inst *Instruction, read int) {
 	// marker is a single byte that indicates the start of an
 	// instruction
 	marker := byte(0)
@@ -78,61 +117,85 @@ func BytesToInstBuf(randBytes []byte) (uints []uint64, read int) {
 	// word buffer
 	var wbuf bytes.Buffer
 
-	var parsing bool
-	var size uint8
+	// empty instruction
+	inst = new(Instruction)
+
+	type State int
+	const (
+		// look for marker
+		SEARCH State = iota
+		// get opcode
+		OPCODE
+		// get argc
+		ARGC
+		// get argv
+		ARGV
+	)
+	var state State
+
 	var b byte
-	for read, b = range randBytes {
+	for read, b = range buf {
 
 		// add byte to word buffer
 		wbuf.WriteByte(b)
 
-		if !parsing {
+		switch state {
+		case SEARCH:
 			// look for marker
 			if wbuf.Bytes()[0] == marker {
-				parsing = true
+				state = OPCODE
 			}
-			// drop first byte (marker) from buffer
-			wbuf.ReadByte()
+			// drain buffer
+			wbuf.Truncate(0)
 			continue
-		}
-
-		// first byte is number of words in instruction
-		if size == 0 {
-			size = uint8(wbuf.Bytes()[0])
-			// drop first byte from buffer
-			wbuf.ReadByte()
+		case OPCODE:
+			// first byte after marker is opcode
+			inst.OpCode = uint8(wbuf.Bytes()[0])
+			state = ARGC
+			// drain buffer
+			wbuf.Truncate(0)
 			continue
-		}
-
-		if wbuf.Len() < 8 {
-			// need more bytes
+		case ARGC:
+			// next two bytes after marker is argc
+			if wbuf.Len() < 2 {
+				// need more bytes
+				continue
+			}
+			// got argc
+			inst.Argc = uint16(binary.BigEndian.Uint16(wbuf.Bytes()))
+			state = ARGV
+			// drain buffer
+			wbuf.Truncate(0)
 			continue
+		case ARGV:
+			// next ARGC words are argv
+			if wbuf.Len() < 8 {
+				// need more bytes
+				continue
+			}
+			// got a word
+			word := binary.BigEndian.Uint64(wbuf.Bytes())
+			inst.Argv = append(inst.Argv, word)
+			// drain buffer
+			wbuf.Truncate(0)
+			if len(inst.Argv) < int(inst.Argc) {
+				// need more words
+				continue
+			}
+			// got all argv; break out of for loop
+			break
 		}
-
-		// got a word
-		word := binary.BigEndian.Uint64(wbuf.Bytes())
-		uints = append(uints, word)
-
-		// drop word from buffer
-		wbuf.Truncate(0)
-
-		if len(uints) < int(size) {
-			// need more words
-			continue
-		}
-
-		// got a complete instruction
-		break
 	}
 
 	return
 }
 
-// RandFloats given a slice of random bytes returns a slice of random
+/*
+// XXXRandFloats given a slice of random bytes returns a slice of random
 // float64 values along with the number of bytes consumed.
-func RandFloats(randBytes []byte) (floats []float64, read int) {
+func XXXRandFloats(randBytes []byte) (floats []float64, read int) {
 	// get uints
-	uints, read := BytesToInstBuf(randBytes)
+	uints, read := FindInstruction(randBytes)
 	for _, word := range uints {
 		// convert to float64
 		float := math.Float64frombits(word)
@@ -140,6 +203,7 @@ func RandFloats(randBytes []byte) (floats []float64, read int) {
 	}
 	return
 }
+*/
 
 // AbsUintMod returns the absolute value of the modulus of two uint64
 // values.
